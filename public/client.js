@@ -1,0 +1,187 @@
+'use strict';
+const $ = (id) => document.getElementById(id);
+const fmt = (n) => {
+  n = Math.floor(n);
+  if (n < 1e6) return n.toLocaleString();
+  const u = ['M', 'B', 'T', 'Qa', 'Qi']; let i = -1;
+  while (n >= 1000 && i < u.length - 1) { n /= 1000; i++; }
+  return n.toFixed(2) + u[i];
+};
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const setHTML = (el, html) => { if (el._h !== html) { el.innerHTML = html; el._h = html; } };
+const secs = (ms) => Math.max(0, Math.ceil(ms / 1000));
+
+let ws, S = null, tab = 'sky', lastRunState = false;
+const pid = localStorage.pid || (localStorage.pid = Math.random().toString(36).slice(2) + Date.now().toString(36));
+$('name').value = localStorage.name || '';
+$('room').value = new URLSearchParams(location.search).get('crew') || localStorage.room || '';
+
+function send(msg) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg)); }
+
+function connect() {
+  const name = $('name').value.trim(), room = $('room').value.trim().toLowerCase();
+  if (!name || !room) return toast('Pick a name and a crew code.');
+  localStorage.name = name; localStorage.room = room;
+  history.replaceState(null, '', `?crew=${encodeURIComponent(room)}`);
+  ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host);
+  ws.onopen = () => send({ type: 'join', room, name, pid });
+  ws.onmessage = (e) => {
+    const m = JSON.parse(e.data);
+    if (m.type === 'error') toast(m.text);
+    if (m.type === 'state') { S = m.state; render(); }
+  };
+  ws.onclose = () => { toast('Disconnected. Reconnecting…'); setTimeout(connect, 2000); };
+  $('join').classList.add('hidden'); $('game').classList.remove('hidden');
+  $('roomlabel').textContent = `Crew: ${room}`;
+}
+$('go').onclick = connect;
+$('room').onkeydown = (e) => { if (e.key === 'Enter') connect(); };
+if (localStorage.name && $('room').value) connect();
+
+let toastTimer;
+function toast(t) { $('toast').textContent = t; $('toast').classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').classList.remove('show'), 2500); }
+
+// ---------------------------------------------------------------- input
+$('polish').onclick = () => send({ type: 'click' });
+$('upgrades').onclick = (e) => { const k = e.target.closest('button')?.dataset.buy; if (k) send({ type: 'buy', key: k }); };
+$('perks').onclick = (e) => { const k = e.target.closest('button')?.dataset.perk; if (k) send({ type: 'perk', key: k }); };
+$('lenses').onclick = (e) => { const k = e.target.closest('.lens')?.dataset.lens; if (k) send({ type: 'attune', lens: k }); };
+$('submit').onclick = () => send({ type: 'submit' });
+$('clear').onclick = () => { if (confirm('Wipe everyone\'s marks off the map?')) send({ type: 'clearBoard' }); };
+$('board').onclick = (e) => {
+  const c = e.target.closest('.cell'); if (!c || c.classList.contains('charted')) return;
+  const i = +c.dataset.i; const v = (S.puzzle.board[i] + 1) % 3;
+  S.puzzle.board[i] = v; render(); // optimistic
+  send({ type: 'cell', i, v });
+};
+$('chatform').onsubmit = (e) => { e.preventDefault(); send({ type: 'chat', text: $('chat').value }); $('chat').value = ''; };
+let notesTimer;
+$('notes').oninput = () => { clearTimeout(notesTimer); notesTimer = setTimeout(() => send({ type: 'notes', text: $('notes').value }), 400); };
+document.querySelectorAll('.tabs button').forEach((b) => (b.onclick = () => setTab(b.dataset.tab)));
+function setTab(t) {
+  tab = t;
+  document.querySelectorAll('.tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === t));
+  $('tab-sky').classList.toggle('hidden', t !== 'sky');
+  $('tab-rift').classList.toggle('hidden', t !== 'rift');
+}
+$('rift').onclick = (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  if (b.dataset.act === 'boon') send({ type: 'boon', key: b.dataset.key });
+  else send({ type: b.dataset.act });
+};
+
+// ---------------------------------------------------------------- render
+function render() {
+  if (!S) return;
+  const now = Date.now();
+  $('dust').textContent = fmt(S.dust);
+  $('dps').textContent = fmt(S.dps);
+  $('shards').textContent = fmt(S.shards);
+  $('mult').textContent = '×' + (S.mult < 100 ? S.mult.toFixed(2) : fmt(S.mult));
+  $('harmony').textContent = '×' + S.harmony;
+  $('clickval').textContent = `+${fmt(S.clickPower)} per click`;
+
+  setHTML($('upgrades'), S.upgrades.map((u) => `<div class="item"><div>${esc(u.name)} <span class="dim">(${u.count})</span><small>${esc(u.desc)}</small></div>
+    <button data-buy="${u.key}" ${S.dust < u.cost ? 'disabled' : ''}>${fmt(u.cost)} ✧</button></div>`).join(''));
+  setHTML($('perks'), S.perks.map((u) => `<div class="item"><div>${esc(u.name)} <span class="dim">(${u.count})</span><small>${esc(u.desc)}</small></div>
+    <button data-perk="${u.key}" ${S.shards < u.cost ? 'disabled' : ''}>${fmt(u.cost)} ◆</button></div>`).join(''));
+
+  renderSky(now);
+  renderRift(now);
+
+  setHTML($('lenses'), S.lenses.map((l) => {
+    const mine = S.you.lens === l.key;
+    const taken = l.holder && !mine;
+    return `<div class="lens ${mine ? 'mine' : ''} ${taken ? 'taken' : ''}" data-lens="${l.key}">
+      <b>${esc(l.name)}</b> ${mine ? '(yours)' : taken ? `<span class="dim">held by ${esc(l.holder)}</span>` : '<span class="dim">free</span>'}
+      <small>${esc(l.desc)}</small></div>`;
+  }).join('') + (S.you.lens && S.you.attuneReadyAt > now ? `<p class="hint">You can switch lenses in ${secs(S.you.attuneReadyAt - now)}s.</p>` : ''));
+
+  setHTML($('players'), S.players.map((p) => `<div><span class="${p.online ? 'on' : 'off'}">●</span> ${esc(p.name)}
+    <span class="dim">${p.lens ? '· ' + esc(p.lens) + ' ' : ''}· ${fmt(p.contributed)} clicked</span></div>`).join(''));
+
+  const feed = $('feed');
+  const atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 30;
+  setHTML(feed, S.feed.map((f) => `<div><span class="dim">${new Date(f.t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span> ${esc(f.text)}</div>`).join(''));
+  if (atBottom) feed.scrollTop = feed.scrollHeight;
+
+  if (document.activeElement !== $('notes') && $('notes').value !== S.notes) $('notes').value = S.notes;
+}
+
+function renderSky(now) {
+  const P = S.puzzle, n = P.size, clue = S.you.clue, lens = S.you.lens;
+  $('consttitle').textContent = `Constellation ${S.level + 1}: ${S.constellation} · ${P.starCount} hidden stars`;
+  const charted = new Set(P.charted);
+  const voids = new Set(lens === 'voids' ? clue : []);
+  const echoes = new Map(lens === 'echoes' ? clue.map((e) => [e.i, e.n]) : []);
+  const showRows = lens === 'rows', showCols = lens === 'cols';
+  const cols = n + (showRows ? 1 : 0);
+  $('board').style.gridTemplateColumns = `repeat(${cols}, 44px)`;
+  let h = '';
+  if (showCols) h += clue.map((c) => `<div class="label">${c}</div>`).join('');
+  for (let r = 0; r < n; r++) {
+    if (showRows) h += `<div class="label">${clue[r]}</div>`;
+    for (let c = 0; c < n; c++) {
+      const i = r * n + c, v = P.board[i];
+      const cls = ['cell', v === 1 ? 'star' : v === 2 ? 'empty' : '', charted.has(i) ? 'charted' : '', voids.has(i) ? 'void' : ''];
+      if (lens === 'quads') {
+        const top = r < clue.half, left = c < clue.half;
+        if (top === left) cls.push('q1');
+      }
+      h += `<div class="${cls.join(' ')}" data-i="${i}">${echoes.has(i) ? `<span class="echo">${echoes.get(i)}</span>` : ''}${v === 1 ? '★' : v === 2 ? '·' : ''}</div>`;
+    }
+  }
+  if (showRows && showCols) h = ''; // can't hold both — defensive
+  setHTML($('board'), h);
+  setHTML($('quadclue'), lens === 'quads'
+    ? `<p><b>Quadrant Lens:</b> top-left ${clue.counts[0]}, top-right ${clue.counts[1]}, bottom-left ${clue.counts[2]}, bottom-right ${clue.counts[3]} <span class="dim">(the top/left half is the first ${clue.half} rows/columns)</span></p>`
+    : lens ? '' : '<p class="hint">You aren\'t holding a lens. Pick one on the right to see a clue.</p>');
+  const mins = Math.round(P.secsPerStar / 60);
+  $('chartinfo').textContent = P.charted.length >= P.starCount
+    ? 'The charting engine has fixed every star. Just try the lock!'
+    : `Charting engine: ${P.charted.length}/${P.starCount} stars fixed · next in ~${Math.max(1, Math.round((1 - P.chartPct) * P.secsPerStar / 60))} min (one every ${mins} min)`;
+  const locked = P.lockedUntil > now;
+  $('submit').disabled = locked;
+  $('lockinfo').textContent = locked ? `Lock cooling down: ${secs(P.lockedUntil - now)}s` : '';
+  setHTML($('solved'), S.solved.length ? S.solved.map((s) => `★ ${esc(s.name)} <span class="dim">(${esc(s.by)})</span>`).join('<br>') : 'None yet.');
+}
+
+function renderRift(now) {
+  const R = S.run;
+  $('riftbadge').textContent = R ? '●' : '';
+  if (R && R.inRun && !lastRunState) setTab('rift');
+  lastRunState = !!(R && R.inRun);
+  if (!R) {
+    setHTML($('rift'), `<h2>The Rift</h2>
+      <p>Spend stardust to tear open the Rift. Everyone online dives in together, and friends can jump in later.
+      Click to fight. Between floors, each runner drafts a boon. Every 5th floor is a boss.</p>
+      <p>Shards you earn go in the party's satchel. <b>Retreat</b> between floors to keep all of them. <b>Fall</b> and you keep only half.
+      Spend Starshards on permanent perks.</p>
+      <p class="dim">Best floor reached: ${S.bestFloor || '—'}</p>
+      <button class="big" data-act="startRun" ${S.dust < S.runCost ? 'disabled' : ''}>Open the Rift (${fmt(S.runCost)} ✧)</button>
+      <p class="hint">Costs about one minute of production. If the whole party goes offline, the Rift freezes until someone returns.</p>`);
+    return;
+  }
+  const members = `<div class="members"><h3>Party</h3>${R.members.map((m) => `<div><span class="${m.online ? 'on' : 'off'}">●</span> <b>${esc(m.name)}</b> · ${fmt(m.dmg)} dmg ${m.picking ? '<span class="dim">(choosing…)</span>' : ''}<br><span class="dim">${m.boons.map(esc).join(', ') || 'no boons yet'}</span></div>`).join('')}</div>`;
+  const top = `<div class="row"><b>Floor ${R.floor}</b> · satchel: ${R.shards} ◆</div>
+    <div>Party HP ${Math.ceil(R.partyHp)}/${R.partyMaxHp}</div><div class="bar party"><div style="width:${100 * Math.max(0, R.partyHp) / R.partyMaxHp}%"></div></div>`;
+  let mid;
+  if (!R.inRun) {
+    mid = `<p>Your crew is in the Rift.</p><button class="big" data-act="joinRun">Jump in!</button>`;
+  } else if (R.phase === 'fight') {
+    const e = R.enemy;
+    mid = `<div class="enemy ${e.boss ? 'boss' : ''}"><div class="name">${e.boss ? '☠ ' : ''}${esc(e.name)}</div>
+      <div class="dim">hits the party for ${e.atk} every 3s</div>
+      <div class="bar hp"><div style="width:${100 * e.hp / e.maxHp}%"></div></div><div>${fmt(e.hp)} / ${fmt(e.maxHp)}</div></div>
+      <button class="big" data-act="hit">⚔ Strike ⚔</button>
+      <p class="hint">Harmony applies here too. Strike together!</p>`;
+  } else {
+    mid = `<h3>Floor cleared! Next floor in ${secs(R.draftEndsAt - now)}s</h3>` +
+      (R.myOffer ? `<p>Choose a boon:</p><div class="boons">${R.myOffer.map((b) => `<button data-act="boon" data-key="${b.key}"><b>${esc(b.name)}</b><small>${esc(b.desc)}</small></button>`).join('')}</div>`
+        : '<p class="dim">Waiting for the others to choose…</p>') +
+      `<div class="row"><button data-act="retreat" class="ghost">🏳 Retreat now with all ${R.shards} ◆</button></div>`;
+  }
+  setHTML($('rift'), `<h2>The Rift</h2>${top}${mid}${members}`);
+}
+
+setInterval(render, 500); // keep countdowns ticking between server updates

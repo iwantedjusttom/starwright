@@ -1,0 +1,21 @@
+{
+  "name": "starwright",
+  "version": "1.0.0",
+  "description": "A cooperative multiplayer idle game: shared observatory, asymmetric-clue star puzzles, and roguelike Rift Runs.",
+  "main": "server.js",
+  "directories": {
+    "test": "test"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "ws": "^8.22.2"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
