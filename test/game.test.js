@@ -173,3 +173,20 @@ test('old saves without gate fields load cleanly', () => {
   g.tick(r, 1000);
   assert.ok(g.view(r, 'a', new Set(['a']), 1000).gate.length === 3);
 });
+
+test('a new run cannot start in the first moments after one ends (stray Strike clicks)', () => {
+  const r = setup(); const on = new Set(['a']);
+  gateReady(r);
+  g.act(r, 'a', { type: 'startRun' }, on, 0);
+  r.run.shards = 4;
+  g.tick(r, 10 * 60 * 1000, on); // party wipes
+  assert.strictEqual(r.run, null);
+  assert.deepStrictEqual({ ...r.lastRun, at: 0 }, { floor: 1, satchel: 4, kept: 2, retreated: false, at: 0 });
+  const t = r.lastRun.at;
+  assert.strictEqual(g.act(r, 'a', { type: 'startRun' }, on, t + 500), null);
+  assert.strictEqual(r.run, null);
+  assert.strictEqual(r.cells, 2);
+  assert.strictEqual(r.bestFloor, 1);
+  g.act(r, 'a', { type: 'startRun' }, on, t + 4000);
+  assert.ok(r.run);
+});

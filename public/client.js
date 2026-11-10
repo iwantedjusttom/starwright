@@ -3,7 +3,7 @@ const $ = (id) => document.getElementById(id);
 const fmt = (n) => {
   n = Math.floor(n);
   if (n < 1e6) return n.toLocaleString();
-  const u = ['M', 'B', 'T', 'Qa', 'Qi']; let i = -1;
+  const u = ['K', 'M', 'B', 'T', 'Qa', 'Qi', 'Sx']; let i = -1;
   while (n >= 1000 && i < u.length - 1) { n /= 1000; i++; }
   return n.toFixed(2) + u[i];
 };
@@ -43,6 +43,7 @@ function pop(e, text, cls = '') {
 const secs = (ms) => Math.max(0, Math.ceil(ms / 1000));
 
 let ws, S = null, tab = 'sky', lastRunState = false;
+const runEndSeen = {}; // run-end time (server) → when this browser first saw it (local), avoids clock-skew issues
 const pid = localStorage.pid || (localStorage.pid = Math.random().toString(36).slice(2) + Date.now().toString(36));
 $('name').value = localStorage.name || '';
 $('room').value = new URLSearchParams(location.search).get('crew') || localStorage.room || '';
@@ -134,6 +135,7 @@ $('rift').addEventListener('pointerdown', (e) => {
 });
 $('rift').onclick = (e) => {
   const b = e.target.closest('button'); if (!b || b.dataset.act === 'hit') return;
+  if (b.dataset.act === 'dismissRun') { localStorage.dismissedRun = S.lastRun.at; return render(); }
   if (b.dataset.act === 'boon') send({ type: 'boon', key: b.dataset.key });
   else send({ type: b.dataset.act });
 };
@@ -260,6 +262,22 @@ function renderRift(now) {
   $('riftbadge').textContent = R ? '●' : '';
   if (R && R.inRun && !lastRunState) setTab('rift');
   lastRunState = !!(R && R.inRun);
+  if (!R && S.lastRun && localStorage.dismissedRun != S.lastRun.at && Date.now() - (runEndSeen[S.lastRun.at] ??= Date.now()) < 30 * 60 * 1000) {
+    // Run summary. Laid out like the fight screen so the spot where Strike was is an inert banner;
+    // the way out is lower down and only unlocks after a moment.
+    const L = S.lastRun;
+    const armed = Date.now() - runEndSeen[L.at] > 1500;
+    setHTML($('rift'), `<h2>The Rift</h2>
+      <div class="row"><b>Floor ${L.floor}</b> · satchel: ${L.satchel} ◆</div>
+      <div>${L.retreated ? 'The party made it out' : 'Party HP 0'}</div><div class="bar party"><div style="width:${L.retreated ? 100 : 0}%"></div></div>
+      <div class="enemy"><div class="name" style="color:${L.retreated ? '#7ee787' : 'var(--red)'}">${L.retreated ? '🏳 Retreated safely' : '💀 The party fell'}</div>
+        <div class="dim">${L.retreated ? 'from' : 'on'} floor ${L.floor}</div>
+        <div class="bar"><div></div></div><div>&nbsp;</div></div>
+      <div class="big banner">Kept ${L.kept} of ${L.satchel} Starshards</div>
+      <p class="hint">Best floor ever: ${S.bestFloor}. Spend shards on perks in the Observatory panel.</p>
+      <div class="row"><button data-act="dismissRun" ${armed ? '' : 'disabled'}>${armed ? 'Back to the Gate' : 'Catching your breath…'}</button></div>`);
+    return;
+  }
   if (!R) {
     if (!S.gateDone) {
       const next = S.gate.findIndex((g) => !g.built);

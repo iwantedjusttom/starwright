@@ -74,6 +74,7 @@ const BASE_CHART_SECONDS = 600; // one star auto-charted per 10 min
 const MAX_OFFLINE_SEC = 7 * 24 * 3600;
 const DRAFT_MS = 25 * 1000;
 const ENEMY_ATTACK_MS = 3000;
+const RUN_COOLDOWN_MS = 3000;
 const BOON_ARM_MS = 1000; // ignore boon picks right after a kill (stray Strike clicks)
 
 // ---------------------------------------------------------------- helpers
@@ -296,6 +297,7 @@ function spawnEnemy(run, now) {
 
 function startRun(room, pid, online, now) {
   if (room.run) return 'A run is already underway.';
+  if (room.lastRun && now - room.lastRun.at < RUN_COOLDOWN_MS) return null; // stray Strike clicks right after a run ends
   if (!gateDone(room)) return 'The Rift Gate is not finished yet.';
   if (room.cells < 1) return 'The Gate needs an Aether Cell to open.';
   const c = runCost(room);
@@ -373,6 +375,8 @@ function endRun(room, now, retreated) {
   log(room, retreated
     ? `🏳 The party retreated from floor ${run.floor} with all ${kept} Starshards.`
     : `💀 The party fell on floor ${run.floor}. Half the satchel survived: ${kept} Starshards.`, now);
+  room.bestFloor = Math.max(room.bestFloor, run.floor);
+  room.lastRun = { floor: run.floor, satchel: run.shards, kept, retreated, at: now };
   room.run = null;
 }
 
@@ -616,7 +620,7 @@ function view(room, pid, online, now = Date.now()) {
     players: Object.entries(room.players).map(([id, pl]) => ({ name: pl.name, online: online.has(id), lens: pl.lens && online.has(id) ? LENSES[pl.lens].name : null, contributed: pl.contributed }))
       .sort((a, b) => b.online - a.online || b.contributed - a.contributed),
     feed: room.feed.slice(-40), notes: room.notes,
-    runCost: runCost(room), bestFloor: room.bestFloor,
+    runCost: runCost(room), bestFloor: room.bestFloor, lastRun: room.lastRun || null,
     run: run && {
       floor: run.floor, phase: run.phase, partyHp: run.partyHp, partyMaxHp: run.partyMaxHp, shards: run.shards,
       enemy: run.enemy && { name: run.enemy.name, boss: run.enemy.boss, hp: Math.max(0, run.enemy.hp), maxHp: run.enemy.maxHp, atk: run.enemy.atk },
