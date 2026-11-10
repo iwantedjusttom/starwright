@@ -8,7 +8,38 @@ const fmt = (n) => {
   return n.toFixed(2) + u[i];
 };
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const setHTML = (el, html) => { if (el._h !== html) { el.innerHTML = html; el._h = html; } };
+// Update a panel in place: only changed text/attributes are touched, so buttons under the
+// cursor survive re-renders (replacing them mid-click was swallowing clicks).
+const setHTML = (el, html) => {
+  if (el._h === html) return;
+  el._h = html;
+  const t = document.createElement('template');
+  t.innerHTML = html;
+  morphChildren(el, t.content);
+};
+function morphChildren(a, b) {
+  const an = [...a.childNodes], bn = [...b.childNodes];
+  bn.forEach((y, i) => {
+    const x = an[i];
+    if (!x) return a.appendChild(y);
+    if (x.nodeType !== y.nodeType || x.nodeName !== y.nodeName) return a.replaceChild(y, x);
+    if (x.nodeType !== 1) { if (x.nodeValue !== y.nodeValue) x.nodeValue = y.nodeValue; return; }
+    for (const at of [...x.attributes]) if (!y.hasAttribute(at.name)) x.removeAttribute(at.name);
+    for (const at of [...y.attributes]) if (x.getAttribute(at.name) !== at.value) x.setAttribute(at.name, at.value);
+    if (x.tagName === 'INPUT' && x !== document.activeElement && y.hasAttribute('value')) x.value = y.getAttribute('value');
+    morphChildren(x, y);
+  });
+  for (let i = an.length - 1; i >= bn.length; i--) a.removeChild(an[i]);
+}
+
+// Instant feedback: a floating number where you clicked.
+function pop(e, text, cls = '') {
+  const d = document.createElement('div');
+  d.className = 'pop ' + cls; d.textContent = text;
+  d.style.left = e.clientX + 'px'; d.style.top = e.clientY + 'px';
+  document.body.appendChild(d);
+  setTimeout(() => d.remove(), 700);
+}
 const secs = (ms) => Math.max(0, Math.ceil(ms / 1000));
 
 let ws, S = null, tab = 'sky', lastRunState = false;
@@ -42,7 +73,16 @@ let toastTimer;
 function toast(t) { $('toast').textContent = t; $('toast').classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').classList.remove('show'), 2500); }
 
 // ---------------------------------------------------------------- input
-$('polish').onclick = () => send({ type: 'click' });
+// Clicker buttons fire on press (not release) and update the numbers immediately;
+// the server's next update corrects any difference.
+$('polish').addEventListener('pointerdown', (e) => {
+  if (!S) return;
+  send({ type: 'click' });
+  const gain = S.clickPower * S.harmony;
+  S.dust += gain;
+  $('dust').textContent = fmt(S.dust);
+  pop(e, '+' + fmt(gain));
+});
 $('upgrades').onclick = (e) => { const k = e.target.closest('button')?.dataset.buy; if (k) send({ type: 'buy', key: k }); };
 $('perks').onclick = (e) => { const k = e.target.closest('button')?.dataset.perk; if (k) send({ type: 'perk', key: k }); };
 $('lenses').onclick = (e) => { const k = e.target.closest('.lens')?.dataset.lens; if (k) send({ type: 'attune', lens: k }); };
@@ -85,8 +125,15 @@ $('workshop').addEventListener('change', (e) => {
   dragging = false;
   send({ type: 'route', key: e.target.dataset.key, value: +e.target.value });
 });
+$('rift').addEventListener('pointerdown', (e) => {
+  if (!e.target.closest('[data-act="hit"]')) return;
+  send({ type: 'hit' });
+  pop(e, '⚔', 'hit');
+  const en = document.querySelector('#rift .enemy');
+  if (en) { en.classList.remove('struck'); void en.offsetWidth; en.classList.add('struck'); }
+});
 $('rift').onclick = (e) => {
-  const b = e.target.closest('button'); if (!b) return;
+  const b = e.target.closest('button'); if (!b || b.dataset.act === 'hit') return;
   if (b.dataset.act === 'boon') send({ type: 'boon', key: b.dataset.key });
   else send({ type: b.dataset.act });
 };

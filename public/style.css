@@ -73,3 +73,11 @@ main { display:grid; grid-template-columns: 1fr 1.6fr 1fr; gap:1em; padding:1em;
 button.small { padding:.2em .5em; font-size:12px; }
 .warn { color:#ffb86b; }
 .stock { display:grid; gap:.3em; }
+
+.pop { position:fixed; pointer-events:none; color:var(--gold); font-weight:bold; font-size:18px; transform:translate(-50%,-50%);
+  animation: pop .7s ease-out forwards; z-index:10; text-shadow:0 0 6px rgba(0,0,0,.8); }
+.pop.hit { color:var(--red); font-size:22px; }
+@keyframes pop { to { transform:translate(-50%,-160%); opacity:0; } }
+.enemy.struck .name { animation: struck .15s; }
+@keyframes struck { 50% { transform: translateX(4px); filter: brightness(1.8); } }
+button.big { touch-action: manipulation; }

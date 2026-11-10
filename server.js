@@ -76,6 +76,11 @@ function broadcast(r) {
   }
 }
 
+function soonBroadcast(r) {
+  if (r.soon) return;
+  r.soon = setTimeout(() => { r.soon = null; broadcast(r); }, 80);
+}
+
 // ---------------------------------------------------------------- sockets
 const wss = new WebSocketServer({ server });
 wss.on('connection', (ws) => {
@@ -107,7 +112,9 @@ wss.on('connection', (ws) => {
     if (err) ws.send(JSON.stringify({ type: 'error', text: err }));
     room.dirty = true;
     // clicks are frequent; let the regular tick broadcast them
-    if (msg.type !== 'click' && msg.type !== 'hit' && msg.type !== 'notes') broadcast(room);
+    // Most actions update everyone right away; rapid clicks are batched into one update per ~80ms.
+    if (msg.type === 'click' || msg.type === 'hit' || msg.type === 'notes') soonBroadcast(room);
+    else broadcast(room);
   });
   ws.on('close', () => {
     if (!room) return;
