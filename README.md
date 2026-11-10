@@ -31,18 +31,28 @@ The URL becomes `?crew=yourcode`, so you can just send it to friends.
 
 World state is saved to `data/<crew>.json` (set `DATA_DIR` to change it).
 
-## Playing with friends over the internet
+## Deploying to Render (free)
 
-The server is one small Node process that needs a persistent disk and WebSockets. Good options:
-- **Render / Railway / Fly.io**: deploy as a Node web service with a persistent volume mounted at `DATA_DIR`.
-- **Your own machine + a tunnel** (e.g. Cloudflare Tunnel or ngrok) for a quick test night.
+Render's free web services sleep after ~15 min without visitors and **wipe their disk** when they do,
+so saves go to a Supabase table instead (the free Supabase tier is plenty).
 
-(Vercel-style serverless hosting won't work as-is because the game uses a long-lived WebSocket server.)
+1. **Supabase:** run `supabase.sql` in your project's SQL editor. Copy the project URL and the
+   **service_role** key (Project Settings → API). Keep that key secret: it only goes into Render.
+2. **Render:** Dashboard → **New → Blueprint** → pick this repo. Render reads `render.yaml` and asks for
+   `SUPABASE_URL` and `SUPABASE_SERVICE_KEY`. Paste them in and deploy.
+3. Open `https://<your-service>.onrender.com/?crew=yourcode` and send that link to your friends.
+
+When the server has been asleep, the first visit takes ~30–60s to wake it. After that, offline progress
+is caught up from the saved timestamp, so nothing is lost while it sleeps.
+
+Without the Supabase variables, the server saves to local files in `data/` (fine on your own machine).
 
 ## Code map
 
 - `game.js`: all game rules (pure functions, unit-tested)
-- `server.js`: HTTP + WebSocket server, rooms, saving, offline catch-up
+- `server.js`: HTTP + WebSocket server, rooms, offline catch-up
+- `storage.js`: saves worlds to Supabase (if configured) or local JSON files
+- `render.yaml` / `supabase.sql`: deploy config
 - `public/`: the browser client (vanilla JS, no build step)
 - `test/`: `node --test` suite
 

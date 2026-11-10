@@ -1,0 +1,14 @@
+# Render Blueprint: Dashboard → New → Blueprint → pick this repo.
+services:
+  - type: web
+    name: starwright
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: SUPABASE_URL
+        sync: false   # Render asks you for this when you create the Blueprint
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
