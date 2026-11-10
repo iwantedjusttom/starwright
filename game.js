@@ -9,7 +9,17 @@ const UPGRADES = {
   mirrors: { name: 'Mirror Array', base: 14000, growth: 1.15, dps: 260, desc: '+260 stardust/sec' },
   cloth: { name: 'Polishing Cloth', base: 50, growth: 1.6, click: 1, desc: '+1 stardust per click' },
   ink: { name: 'Charting Ink', base: 500, growth: 1.8, chart: 0.25, desc: 'Auto-charting 25% faster' },
+  condenser: { name: 'Aether Condenser', base: 8000, growth: 2.4, needsGate: true, desc: '+1 Aether Cell every 20 min (fuel for Rift Runs)' },
 };
+
+// The Rift Gate is built once, in stages. Each stage needs stardust AND something stardust can't buy directly.
+const GATE_STAGES = [
+  { name: 'Foundation', cost: 2500, need: 'Own 10 Brass Telescopes', met: (r) => r.upgrades.telescope >= 10 },
+  { name: 'Focusing Ring', cost: 25000, need: 'Relight at least 1 constellation', met: (r) => r.level >= 1 },
+  { name: 'Keystone', cost: 150000, need: 'Own 5 Observatory Domes', met: (r) => r.upgrades.dome >= 5 },
+];
+const CELL_SECONDS = 20 * 60; // per condenser
+const CELL_CAP = 3;
 
 // Permanent perks bought with Starshards earned in Rift Runs.
 const PERKS = {
@@ -134,6 +144,7 @@ function newRoom(id, now = Date.now()) {
     puzzle: makePuzzle(0),
     players: {}, feed: [], notes: '',
     run: null, runsLaunched: 0, bestFloor: 0,
+    gate: 0, cells: 0, cellProgress: 0,
   };
   log(room, 'The observatory creaks open. Polish the lenses, chart the sky, and relight the first constellation.', now);
   return room;
@@ -143,7 +154,18 @@ const dps = (room) => Object.entries(UPGRADES).reduce((s, [k, d]) => s + (d.dps 
   * room.mult * (1 + 0.1 * room.perks.echo);
 const clickPower = (room) => (1 + room.upgrades.cloth) * room.mult;
 const chartRate = (room) => (1 + 0.25 * room.upgrades.ink) * (1 + 0.2 * room.perks.cartographer) / BASE_CHART_SECONDS;
-const runCost = (room) => Math.max(100, Math.floor(dps(room) * 60));
+const runCost = (room) => Math.max(500, Math.floor(dps(room) * 300)); // ~5 min of production, plus 1 Aether Cell
+const gateDone = (room) => room.gate >= GATE_STAGES.length;
+
+// Fill in fields added after a world was first saved.
+function normalize(room) {
+  for (const k of Object.keys(UPGRADES)) if (room.upgrades[k] == null) room.upgrades[k] = 0;
+  for (const k of Object.keys(PERKS)) if (room.perks[k] == null) room.perks[k] = 0;
+  if (room.gate == null) room.gate = 0;
+  if (room.cells == null) room.cells = 0;
+  if (room.cellProgress == null) room.cellProgress = 0;
+  return room;
+}
 
 function harmonyAt(room, now) {
   let h = 0;
@@ -180,6 +202,18 @@ function tick(room, now, online = new Set()) {
   }
   if (charted && dt < 5) log(room, `✦ The charting engine fixed a star in place on the map.`, now);
 
+  if (gateDone(room) && room.upgrades.condenser > 0) {
+    if (room.cells < CELL_CAP) {
+      room.cellProgress += dt * room.upgrades.condenser / CELL_SECONDS;
+      const made = Math.min(Math.floor(room.cellProgress), CELL_CAP - room.cells);
+      if (made > 0) {
+        room.cells += made; room.cellProgress -= made;
+        if (dt < 5) log(room, `⚗ The condensers distilled an Aether Cell (${room.cells}/${CELL_CAP}).`, now);
+      }
+      if (room.cells >= CELL_CAP) room.cellProgress = 0;
+    } else room.cellProgress = 0;
+  }
+
   if (room.run) tickRun(room, now, dt, online);
   return { dt, gain, charted };
 }
@@ -203,9 +237,11 @@ function spawnEnemy(run, now) {
 
 function startRun(room, pid, online, now) {
   if (room.run) return 'A run is already underway.';
+  if (!gateDone(room)) return 'The Rift Gate is not finished yet.';
+  if (room.cells < 1) return 'The Gate needs an Aether Cell to open.';
   const c = runCost(room);
   if (room.dust < c) return `Launching a Rift Run costs ${c} stardust.`;
-  room.dust -= c; room.runsLaunched++;
+  room.dust -= c; room.cells--; room.runsLaunched++;
   const run = { floor: 1, phase: 'fight', members: {}, partyMaxHp: 0, partyHp: 0, shards: 0, drafts: {}, draftEndsAt: 0, startedAt: now, lastPassive: now };
   room.run = run;
   for (const id of online) joinRun(room, id, now, true);
@@ -325,10 +361,23 @@ function act(room, pid, msg, online, now = Date.now()) {
     case 'buy': {
       const def = UPGRADES[msg.key];
       if (!def) return 'No such upgrade.';
+      if (def.needsGate && !gateDone(room)) return 'Finish the Rift Gate first.';
       const c = cost(def, room.upgrades[msg.key]);
       if (room.dust < c) return 'Not enough stardust.';
       room.dust -= c; room.upgrades[msg.key]++;
       log(room, `${me.name} built a ${def.name} (#${room.upgrades[msg.key]}).`, now);
+      return null;
+    }
+    case 'gate': {
+      const st = GATE_STAGES[room.gate];
+      if (!st) return 'The Gate is already complete.';
+      if (!st.met(room)) return `Not yet: ${st.need}.`;
+      if (room.dust < st.cost) return `The ${st.name} costs ${st.cost} stardust.`;
+      room.dust -= st.cost; room.gate++;
+      if (gateDone(room)) {
+        room.cells = Math.max(room.cells, 1);
+        log(room, `🌀 ${me.name} set the Keystone. The Rift Gate is complete and holds its first Aether Cell!`, now);
+      } else log(room, `🏗 ${me.name} built the Gate's ${st.name}.`, now);
       return null;
     }
     case 'perk': {
@@ -374,6 +423,7 @@ function act(room, pid, msg, online, now = Date.now()) {
       const bonus = Math.max(50, dps(room) * 120);
       room.solved.push({ name, at: now, by: me.name });
       room.level++; room.mult *= 1.5;
+      if (room.cells < CELL_CAP) room.cells++; // relighting a constellation also condenses a cell
       room.dust += bonus; room.totalDust += bonus;
       room.puzzle = makePuzzle(room.level);
       log(room, `★ ${name} blazes back to life! Everything is now ×1.5 stronger, plus ${Math.round(bonus)} stardust.`, now);
@@ -429,7 +479,12 @@ function view(room, pid, online, now = Date.now()) {
     harmony: harmonyAt(room, now), level: room.level,
     constellation: CONSTELLATIONS[room.level % CONSTELLATIONS.length],
     solved: room.solved,
-    upgrades: Object.entries(UPGRADES).map(([key, d]) => ({ key, name: d.name, desc: d.desc, count: room.upgrades[key], cost: cost(d, room.upgrades[key]) })),
+    upgrades: Object.entries(UPGRADES).filter(([, d]) => !d.needsGate || gateDone(room))
+      .map(([key, d]) => ({ key, name: d.name, desc: d.desc, count: room.upgrades[key], cost: cost(d, room.upgrades[key]) })),
+    gate: GATE_STAGES.map((st, i) => ({ name: st.name, cost: st.cost, need: st.need, met: st.met(room), built: i < room.gate })),
+    gateDone: gateDone(room),
+    cells: room.cells, cellCap: CELL_CAP, condensers: room.upgrades.condenser,
+    nextCellSec: room.upgrades.condenser && room.cells < CELL_CAP ? (1 - room.cellProgress) * CELL_SECONDS / room.upgrades.condenser : null,
     perks: Object.entries(PERKS).map(([key, d]) => ({ key, name: d.name, desc: d.desc, count: room.perks[key], cost: cost(d, room.perks[key]) })),
     puzzle: {
       size: p.size, board: p.board, starCount: p.stars.length,
@@ -466,4 +521,4 @@ function view(room, pid, online, now = Date.now()) {
   };
 }
 
-module.exports = { newRoom, tick, act, view, ensurePlayer, makePuzzle, checkGuess, dps, LENSES, BOONS, UPGRADES, PERKS };
+module.exports = { normalize, GATE_STAGES, newRoom, tick, act, view, ensurePlayer, makePuzzle, checkGuess, dps, LENSES, BOONS, UPGRADES, PERKS };

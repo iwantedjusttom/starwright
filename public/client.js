@@ -152,14 +152,27 @@ function renderRift(now) {
   if (R && R.inRun && !lastRunState) setTab('rift');
   lastRunState = !!(R && R.inRun);
   if (!R) {
+    if (!S.gateDone) {
+      const next = S.gate.findIndex((g) => !g.built);
+      setHTML($('rift'), `<h2>The Rift Gate</h2>
+        <p>Something stirs beyond the sky, but the observatory can't reach it yet. Build the Gate, one stage at a time.
+        Each stage needs stardust <i>and</i> a milestone.</p>
+        ${S.gate.map((g, i) => `<div class="item"><div>${g.built ? '✅' : i === next ? '🔨' : '🔒'} <b>${esc(g.name)}</b>
+          <small>${g.built ? 'Built' : `${g.met ? '✔' : '✗'} ${esc(g.need)} · ${fmt(g.cost)} stardust`}</small></div>
+          ${i === next ? `<button data-act="gate" ${g.met && S.dust >= g.cost ? '' : 'disabled'}>Build</button>` : ''}</div>`).join('')}
+        <p class="hint">Once the Gate stands, each Rift Run burns one Aether Cell. Build Aether Condensers to distill more, even while you're away.</p>`);
+      return;
+    }
+    const cellEta = S.nextCellSec != null ? ` · next in ${Math.ceil(S.nextCellSec / 60)} min` : S.cells >= S.cellCap ? ' · storage full' : '';
     setHTML($('rift'), `<h2>The Rift</h2>
-      <p>Spend stardust to tear open the Rift. Everyone online dives in together, and friends can jump in later.
-      Click to fight. Between floors, each runner drafts a boon. Every 5th floor is a boss.</p>
+      <p>Everyone online dives in together, and friends can jump in later. Click to fight. Between floors, each runner drafts a boon. Every 5th floor is a boss.</p>
       <p>Shards you earn go in the party's satchel. <b>Retreat</b> between floors to keep all of them. <b>Fall</b> and you keep only half.
       Spend Starshards on permanent perks.</p>
-      <p class="dim">Best floor reached: ${S.bestFloor || '—'}</p>
-      <button class="big" data-act="startRun" ${S.dust < S.runCost ? 'disabled' : ''}>Open the Rift (${fmt(S.runCost)} ✧)</button>
-      <p class="hint">Costs about one minute of production. If the whole party goes offline, the Rift freezes until someone returns.</p>`);
+      <p><b>Aether Cells: ${'⚗'.repeat(S.cells)}${'·'.repeat(Math.max(0, S.cellCap - S.cells))} ${S.cells}/${S.cellCap}</b>
+        <span class="dim">${S.condensers ? `${S.condensers} condenser(s)${cellEta}` : 'Build an Aether Condenser (Observatory panel) to make more.'}</span></p>
+      <p class="dim">Best floor reached: ${S.bestFloor || '—'} · Relighting a constellation also grants a cell.</p>
+      <button class="big" data-act="startRun" ${S.dust < S.runCost || S.cells < 1 ? 'disabled' : ''}>Open the Rift (1 ⚗ + ${fmt(S.runCost)} ✧)</button>
+      <p class="hint">If the whole party goes offline, the Rift freezes until someone returns.</p>`);
     return;
   }
   const members = `<div class="members"><h3>Party</h3>${R.members.map((m) => `<div><span class="${m.online ? 'on' : 'off'}">●</span> <b>${esc(m.name)}</b> · ${fmt(m.dmg)} dmg ${m.picking ? '<span class="dim">(choosing…)</span>' : ''}<br><span class="dim">${m.boons.map(esc).join(', ') || 'no boons yet'}</span></div>`).join('')}</div>`;

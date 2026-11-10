@@ -32,7 +32,7 @@ function loadRoom(id) {
   if (!loading.has(id)) {
     loading.set(id, (async () => {
       await saving.get(id);
-      const state = (await store.load(id)) || game.newRoom(id);
+      const state = game.normalize((await store.load(id)) || game.newRoom(id));
       const now = Date.now();
       const away = now - state.lastTick;
       const before = { dust: state.dust, revealed: state.puzzle.revealed };
