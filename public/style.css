@@ -65,3 +65,5 @@ main { display:grid; grid-template-columns: 1fr 1.6fr 1fr; gap:1em; padding:1em;
 
 #toast { position:fixed; bottom:1em; left:50%; transform:translateX(-50%); background:#3a1f2a; border:1px solid var(--red); padding:.6em 1em; border-radius:8px; opacity:0; transition:opacity .3s; pointer-events:none; }
 #toast.show { opacity:1; }
+
+.big.banner { width:100%; padding:1.2em; font-size:18px; text-align:center; border:1px dashed var(--line); border-radius:8px; color:var(--dim); user-select:none; }

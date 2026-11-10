@@ -176,9 +176,15 @@ function renderRift(now) {
       <button class="big" data-act="hit">⚔ Strike ⚔</button>
       <p class="hint">Harmony applies here too. Strike together!</p>`;
   } else {
-    mid = `<h3>Floor cleared! Next floor in ${secs(R.draftEndsAt - now)}s</h3>` +
-      (R.myOffer ? `<p>Choose a boon:</p><div class="boons">${R.myOffer.map((b) => `<button data-act="boon" data-key="${b.key}"><b>${esc(b.name)}</b><small>${esc(b.desc)}</small></button>`).join('')}</div>`
-        : '<p class="dim">Waiting for the others to choose…</p>') +
+    // The banner sits exactly where Strike was, so leftover attack clicks land on something harmless.
+    // Boons sit below it and stay disabled for a moment after the kill.
+    const armed = now >= R.boonsArmAt;
+    mid = `<div class="enemy"><div class="name" style="color:#7ee787">Floor ${R.floor} cleared!</div>
+      <div class="dim">Next floor in ${secs(R.draftEndsAt - now)}s</div>
+      <div class="bar"><div></div></div><div>&nbsp;</div></div>
+      <div class="big banner">${R.myOffer ? (armed ? '↓ Choose a boon below ↓' : 'Steady…') : 'Waiting for the others to choose…'}</div>
+      <p class="hint">&nbsp;</p>` +
+      (R.myOffer ? `<div class="boons">${R.myOffer.map((b) => `<button data-act="boon" data-key="${b.key}" ${armed ? '' : 'disabled'}><b>${esc(b.name)}</b><small>${esc(b.desc)}</small></button>`).join('')}</div>` : '') +
       `<div class="row"><button data-act="retreat" class="ghost">🏳 Retreat now with all ${R.shards} ◆</button></div>`;
   }
   setHTML($('rift'), `<h2>The Rift</h2>${top}${mid}${members}`);

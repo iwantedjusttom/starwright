@@ -82,3 +82,16 @@ test('rift run: party wipes if nobody fights, keeps half; freezes when all offli
   assert.strictEqual(r.run, null);
   assert.strictEqual(r.shards, 4);
 });
+
+test('boon picks are ignored for a moment after a kill (stray Strike clicks)', () => {
+  const r = setup(); const on = new Set(['a']);
+  r.dust = 1000;
+  g.act(r, 'a', { type: 'startRun' }, on, 0);
+  let t = 0;
+  while (r.run.phase === 'fight') { t += 10; g.act(r, 'a', { type: 'hit' }, on, t); }
+  const offer = r.run.drafts.a;
+  g.act(r, 'a', { type: 'boon', key: offer[0] }, on, t + 200);
+  assert.ok(r.run.drafts.a, 'early pick ignored');
+  g.act(r, 'a', { type: 'boon', key: offer[0] }, on, t + 1200);
+  assert.strictEqual(r.run.floor, 2);
+});

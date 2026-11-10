@@ -50,6 +50,7 @@ const BASE_CHART_SECONDS = 600; // one star auto-charted per 10 min
 const MAX_OFFLINE_SEC = 7 * 24 * 3600;
 const DRAFT_MS = 25 * 1000;
 const ENEMY_ATTACK_MS = 3000;
+const BOON_ARM_MS = 1000; // ignore boon picks right after a kill (stray Strike clicks)
 
 // ---------------------------------------------------------------- helpers
 const shuffle = (a) => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
@@ -245,6 +246,7 @@ function hitEnemy(room, run, dmg, now) {
     run.shards += shardGain;
     log(room, `⚔ Floor ${run.floor}: ${run.enemy.name} shattered! (+${shardGain} shards in the satchel)`, now);
     run.phase = 'draft';
+    run.draftStartedAt = now;
     run.draftEndsAt = now + DRAFT_MS;
     run.partyHp = Math.min(run.partyMaxHp, run.partyHp + Math.round(run.partyMaxHp * 0.1));
     run.drafts = {};
@@ -399,6 +401,7 @@ function act(room, pid, msg, online, now = Date.now()) {
     case 'boon': {
       const run = room.run;
       if (!run || run.phase !== 'draft' || !run.drafts[pid]) return null;
+      if (now - (run.draftStartedAt || 0) < BOON_ARM_MS) return null; // stray click from the fight
       if (!run.drafts[pid].includes(msg.key)) return 'Not an offered boon.';
       applyBoon(run, pid, msg.key);
       delete run.drafts[pid];
@@ -451,7 +454,7 @@ function view(room, pid, online, now = Date.now()) {
     run: run && {
       floor: run.floor, phase: run.phase, partyHp: run.partyHp, partyMaxHp: run.partyMaxHp, shards: run.shards,
       enemy: run.enemy && { name: run.enemy.name, boss: run.enemy.boss, hp: Math.max(0, run.enemy.hp), maxHp: run.enemy.maxHp, atk: run.enemy.atk },
-      draftEndsAt: run.draftEndsAt,
+      draftEndsAt: run.draftEndsAt, boonsArmAt: (run.draftStartedAt || 0) + BOON_ARM_MS,
       inRun: !!run.members[pid],
       myOffer: run.drafts[pid] ? run.drafts[pid].map((k) => ({ key: k, ...BOONS[k] })) : null,
       members: Object.entries(run.members).map(([id, m]) => ({
