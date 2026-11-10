@@ -12,6 +12,13 @@ When people log on, you solve star puzzles together and dive into roguelike Rift
 | **Star Lock puzzles**: find the hidden stars on a grid to relight a constellation (permanent ×1.5 to everything). | Rotate through lenses (5 min cooldown per switch), use the shared notebook. The charting engine also fixes one real star every ~10 min, so the sky eventually solves itself. | Each of the 5 lenses (rows, columns, voids, echoes, quadrants) can only be held by one person at a time. Everyone has a piece and has to talk it through. |
 | **Rift Runs** (roguelike): spend ~1 min of production to open the Rift. Fight floors by clicking, draft 1 of 3 boons between floors, boss every 5th floor. | Enemy HP scales with party size, so solo runs are viable | Party-synergy boons (Constellation Bond, Resonance, Mending Light) |
 
+**Workshop (crew-wide automation):** route part of your stardust/sec through shared sliders into machines.
+Prisms make **Starlight**, Condensers make **Aether**, Lens Grinders turn 20 Starlight + 10 Aether into a **Crafted Lens**.
+Conduits cap the total you can route, and the Grinder's ratio means you have to balance the chain.
+Aether is pressed into **Aether Cells** (Rift fuel). Lenses are installed (+3% production each) or spent to chart a star instantly.
+
+**The Rift Gate:** the Rift must be built first, in 3 stages: 10 telescopes, a relit constellation, 5 domes, plus stardust.
+
 **How the loops feed each other:** stardust pays for Rift Runs → runs earn **Starshards** →
 shards buy permanent perks (more production, faster charting, stronger runs) → constellations multiply everything.
 

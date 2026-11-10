@@ -62,8 +62,29 @@ function setTab(t) {
   tab = t;
   document.querySelectorAll('.tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === t));
   $('tab-sky').classList.toggle('hidden', t !== 'sky');
+  $('tab-workshop').classList.toggle('hidden', t !== 'workshop');
   $('tab-rift').classList.toggle('hidden', t !== 'rift');
 }
+$('workshop').onclick = (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  if (b.dataset.act === 'machine') send({ type: 'machine', key: b.dataset.key });
+  else if (b.dataset.act === 'lens') send({ type: 'lens', use: b.dataset.use });
+  else if (b.dataset.act === 'routeMax') send({ type: 'route', key: b.dataset.key, value: +b.dataset.v });
+  else send({ type: b.dataset.act });
+};
+// Sliders: send on release; don't redraw the panel while someone is dragging.
+let dragging = false;
+$('workshop').addEventListener('pointerdown', (e) => { if (e.target.type === 'range') dragging = true; });
+window.addEventListener('pointerup', () => { dragging = false; });
+$('workshop').addEventListener('input', (e) => {
+  if (e.target.type !== 'range') return;
+  e.target.closest('.machine').querySelector('.routeval').textContent = `${fmt(+e.target.value)}/s`;
+});
+$('workshop').addEventListener('change', (e) => {
+  if (e.target.type !== 'range') return;
+  dragging = false;
+  send({ type: 'route', key: e.target.dataset.key, value: +e.target.value });
+});
 $('rift').onclick = (e) => {
   const b = e.target.closest('button'); if (!b) return;
   if (b.dataset.act === 'boon') send({ type: 'boon', key: b.dataset.key });
@@ -75,7 +96,8 @@ function render() {
   if (!S) return;
   const now = Date.now();
   $('dust').textContent = fmt(S.dust);
-  $('dps').textContent = fmt(S.dps);
+  $('dps').textContent = fmt(S.netDps);
+  $('routed').textContent = S.workshop.used > 0 ? ` · ${fmt(S.workshop.used)}/s to Workshop` : '';
   $('shards').textContent = fmt(S.shards);
   $('mult').textContent = '×' + (S.mult < 100 ? S.mult.toFixed(2) : fmt(S.mult));
   $('harmony').textContent = '×' + S.harmony;
@@ -88,6 +110,7 @@ function render() {
 
   renderSky(now);
   renderRift(now);
+  renderWorkshop();
 
   setHTML($('lenses'), S.lenses.map((l) => {
     const mine = S.you.lens === l.key;
@@ -146,6 +169,45 @@ function renderSky(now) {
   setHTML($('solved'), S.solved.length ? S.solved.map((s) => `★ ${esc(s.name)} <span class="dim">(${esc(s.by)})</span>`).join('<br>') : 'None yet.');
 }
 
+function renderWorkshop() {
+  if (dragging || document.activeElement?.type === 'range') return;
+  const W = S.workshop, r = W.rates || {};
+  const rate = (v) => (v >= 10 ? fmt(v) : (+v || 0).toFixed(2));
+  const machines = W.machines.map((m) => {
+    let body = '';
+    if (m.intake != null) {
+      const max = Math.max(m.intake, 0);
+      body = m.count ? `<div class="row"><input type="range" min="0" max="${max}" step="1" value="${Math.min(m.route, max)}" data-key="${m.key}">
+          <span class="routeval">${fmt(Math.min(m.route, max))}/s</span>
+          <button class="ghost small" data-act="routeMax" data-key="${m.key}" data-v="${max}">max</button></div>
+          <small>Actually flowing: ${fmt(m.flow)} stardust/s${m.flow + 0.01 < Math.min(m.route, max) ? ' <span class="warn">(squeezed by conduits or production)</span>' : ''}</small>`
+        : '<small>Build one to start routing.</small>';
+    } else {
+      body = m.count ? `<small>${r.lenses > 0 ? `Grinding ${rate(r.lenses * 60)} lenses/min` : 'Idle'}${r.starved ? ` <span class="warn">· starved for ${r.starved === 'starlight' ? 'Starlight' : 'Aether'}</span>` : ''}</small>` : '';
+    }
+    return `<div class="machine item"><div style="flex:1"><b>${esc(m.name)}</b> <span class="dim">(${m.count})</span><small>${esc(m.desc)}</small>${body}</div>
+      <button data-act="machine" data-key="${m.key}" ${S.dust < m.cost ? 'disabled' : ''}>${fmt(m.cost)} ✧</button></div>`;
+  }).join('');
+  setHTML($('workshop'), `
+    <div class="item"><div><b>Conduits</b> <span class="dim">routing ${fmt(W.used)} / ${fmt(W.cap)} stardust/s</span>
+      <div class="bar"><div style="width:${100 * W.used / W.cap}%;background:var(--violet)"></div></div></div>
+      <button data-act="conduit" ${S.dust < W.conduitCost ? 'disabled' : ''}>Widen (${fmt(W.conduitCost)} ✧)</button></div>
+    ${machines}
+    <h3>Stockpiles</h3>
+    <div class="stock">
+      <div>✨ <b>${fmt(W.starlight)}</b> Starlight <span class="dim">+${rate(r.starlight)}/s</span></div>
+      <div>💧 <b>${fmt(W.aether)}</b> Aether <span class="dim">+${rate(r.aether)}/s</span></div>
+      <div>🔷 <b>${Math.floor(W.lenses)}</b> Crafted Lenses <span class="dim">(${W.installed} installed)</span></div>
+    </div>
+    <h3>Use them</h3>
+    <div class="item"><div>Press an Aether Cell <small>Fuel for one Rift Run. You hold ${S.cells}/${S.cellCap}.</small></div>
+      <button data-act="pressCell" ${W.aether < S.cellAether || S.cells >= S.cellCap ? 'disabled' : ''}>${S.cellAether} 💧</button></div>
+    <div class="item"><div>Install a lens in the telescopes <small>Permanent +${Math.round(W.installBonus * 100)}% production each (now +${Math.round(W.installed * W.installBonus * 100)}%)</small></div>
+      <button data-act="lens" data-use="install" ${W.lenses < 1 ? 'disabled' : ''}>1 🔷</button></div>
+    <div class="item"><div>Peer through a lens <small>Instantly chart one hidden star on the current Star Lock</small></div>
+      <button data-act="lens" data-use="reveal" ${W.lenses < 1 ? 'disabled' : ''}>1 🔷</button></div>`);
+}
+
 function renderRift(now) {
   const R = S.run;
   $('riftbadge').textContent = R ? '●' : '';
@@ -160,16 +222,15 @@ function renderRift(now) {
         ${S.gate.map((g, i) => `<div class="item"><div>${g.built ? '✅' : i === next ? '🔨' : '🔒'} <b>${esc(g.name)}</b>
           <small>${g.built ? 'Built' : `${g.met ? '✔' : '✗'} ${esc(g.need)} · ${fmt(g.cost)} stardust`}</small></div>
           ${i === next ? `<button data-act="gate" ${g.met && S.dust >= g.cost ? '' : 'disabled'}>Build</button>` : ''}</div>`).join('')}
-        <p class="hint">Once the Gate stands, each Rift Run burns one Aether Cell. Build Aether Condensers to distill more, even while you're away.</p>`);
+        <p class="hint">Once the Gate stands, each Rift Run burns one Aether Cell. Cells are pressed from Aether in the Workshop.</p>`);
       return;
     }
-    const cellEta = S.nextCellSec != null ? ` · next in ${Math.ceil(S.nextCellSec / 60)} min` : S.cells >= S.cellCap ? ' · storage full' : '';
     setHTML($('rift'), `<h2>The Rift</h2>
       <p>Everyone online dives in together, and friends can jump in later. Click to fight. Between floors, each runner drafts a boon. Every 5th floor is a boss.</p>
       <p>Shards you earn go in the party's satchel. <b>Retreat</b> between floors to keep all of them. <b>Fall</b> and you keep only half.
       Spend Starshards on permanent perks.</p>
       <p><b>Aether Cells: ${'⚗'.repeat(S.cells)}${'·'.repeat(Math.max(0, S.cellCap - S.cells))} ${S.cells}/${S.cellCap}</b>
-        <span class="dim">${S.condensers ? `${S.condensers} condenser(s)${cellEta}` : 'Build an Aether Condenser (Observatory panel) to make more.'}</span></p>
+        <span class="dim">Press more from Aether in the Workshop (${S.cellAether} each).</span></p>
       <p class="dim">Best floor reached: ${S.bestFloor || '—'} · Relighting a constellation also grants a cell.</p>
       <button class="big" data-act="startRun" ${S.dust < S.runCost || S.cells < 1 ? 'disabled' : ''}>Open the Rift (1 ⚗ + ${fmt(S.runCost)} ✧)</button>
       <p class="hint">If the whole party goes offline, the Rift freezes until someone returns.</p>`);

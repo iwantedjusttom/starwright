@@ -17,7 +17,7 @@
 
   <div id="game" class="hidden">
     <header>
-      <div><b id="dust">0</b> stardust <span class="dim">(<span id="dps">0</span>/s)</span></div>
+      <div><b id="dust">0</b> stardust <span class="dim">(<span id="dps">0</span>/s<span id="routed"></span>)</span></div>
       <div><b id="shards">0</b> Starshards</div>
       <div>Multiplier <b id="mult">×1</b></div>
       <div>Harmony <b id="harmony">×1</b></div>
@@ -38,6 +38,7 @@
       <section class="col wide">
         <nav class="tabs">
           <button data-tab="sky" class="active">Star Lock</button>
+          <button data-tab="workshop">Workshop</button>
           <button data-tab="rift">Rift Run <span id="riftbadge"></span></button>
         </nav>
 
@@ -58,6 +59,13 @@
           <div id="quadclue"></div>
           <h3>Relit constellations</h3>
           <div id="solved" class="dim">None yet.</div>
+        </div>
+
+        <div id="tab-workshop" class="hidden">
+          <h2>Workshop</h2>
+          <p class="hint">Route part of the crew's stardust into machines. Whatever you route is taken out of production before it reaches the bank.
+            Sliders are shared, so anyone can change them. Talk it over!</p>
+          <div id="workshop"></div>
         </div>
 
         <div id="tab-rift" class="hidden">

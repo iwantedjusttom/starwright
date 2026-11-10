@@ -101,7 +101,6 @@ test('the Rift needs a finished Gate, and each stage needs its milestone', () =>
   const r = setup(); const on = new Set(['a']);
   r.dust = 1e6;
   assert.match(g.act(r, 'a', { type: 'startRun' }, on, 0), /Gate/);
-  assert.match(g.act(r, 'a', { type: 'buy', key: 'condenser' }, on, 0), /Gate/);
   assert.match(g.act(r, 'a', { type: 'gate' }, on, 0), /Telescopes/);
   r.upgrades.telescope = 10;
   assert.strictEqual(g.act(r, 'a', { type: 'gate' }, on, 0), null);
@@ -114,21 +113,63 @@ test('the Rift needs a finished Gate, and each stage needs its milestone', () =>
   assert.strictEqual(r.cells, 0);
 });
 
-test('runs burn a cell; condensers refill them over time (offline too), capped', () => {
+test('workshop: routing feeds machines, limited by machines, conduits and production', () => {
+  const r = setup(); const on = new Set(['a']);
+  r.upgrades.telescope = 200; // 200 dust/s
+  r.dust = 1e6;
+  g.act(r, 'a', { type: 'machine', key: 'prism' }, on, 0);
+  g.act(r, 'a', { type: 'route', key: 'prism', value: 1000 }, on, 0);
+  r.lastTick = 0;
+  g.tick(r, 10 * 1000);
+  // 1 prism takes at most 25/s → 2.5 starlight/s; bank gets the other 175/s
+  assert.ok(Math.abs(r.workshop.starlight - 25) < 1e-6);
+  assert.ok(Math.abs(r.dust - (1e6 - 300 + 1750)) < 1e-6);
+  // conduits (50/s) are shared proportionally
+  for (let i = 0; i < 3; i++) { g.act(r, 'a', { type: 'machine', key: 'prism' }, on, 10000); g.act(r, 'a', { type: 'machine', key: 'condenser' }, on, 10000); }
+  g.act(r, 'a', { type: 'route', key: 'condenser', value: 100 }, on, 10000);
+  const v = g.view(r, 'a', on, 10000).workshop;
+  assert.strictEqual(v.used, 50);
+});
+
+test('workshop: grinders turn starlight + aether into lenses, and report the bottleneck', () => {
+  const r = setup(); const on = new Set(['a']);
+  Object.assign(r.workshop, { starlight: 1000, aether: 25 });
+  r.workshop.machines.grinder = 1;
+  r.lastTick = 0;
+  g.tick(r, 1000); g.tick(r, 2000); // short ticks so rates are recorded
+  for (let t = 3000; t <= 40000; t += 1000) g.tick(r, t);
+  assert.ok(Math.abs(r.workshop.lenses - 2.5) < 1e-6, String(r.workshop.lenses)); // aether ran out
+  assert.strictEqual(r.workshop.rates.starved, 'aether');
+  r.workshop.lenses = 2;
+  g.act(r, 'a', { type: 'lens', use: 'install' }, on, 40000);
+  const before = r.puzzle.revealed;
+  g.act(r, 'a', { type: 'lens', use: 'reveal' }, on, 40000);
+  assert.strictEqual(r.workshop.installed, 1);
+  assert.strictEqual(r.puzzle.revealed, before + 1);
+});
+
+test('cells are pressed from aether, capped', () => {
   const r = setup(); const on = new Set(['a']);
   gateReady(r); r.cells = 0;
   assert.match(g.act(r, 'a', { type: 'startRun' }, on, 0), /Aether Cell/);
-  r.upgrades.condenser = 2;
-  g.tick(r, 10 * 60 * 1000); // 2 condensers × 10 min = 1 cell
-  assert.strictEqual(r.cells, 1);
-  g.tick(r, 24 * 3600 * 1000);
+  assert.match(g.act(r, 'a', { type: 'pressCell' }, on, 0), /300 Aether/);
+  r.workshop.aether = 2000;
+  for (let i = 0; i < 5; i++) g.act(r, 'a', { type: 'pressCell' }, on, 0);
   assert.strictEqual(r.cells, 3);
+  assert.strictEqual(r.workshop.aether, 1100);
+});
+
+test('timer-era condensers carry over into the Workshop', () => {
+  const r = setup(); delete r.workshop; r.upgrades.condenser = 2;
+  g.normalize(r);
+  assert.strictEqual(r.workshop.machines.condenser, 2);
+  assert.strictEqual(r.upgrades.condenser, undefined);
 });
 
 test('old saves without gate fields load cleanly', () => {
-  const r = setup(); delete r.gate; delete r.cells; delete r.cellProgress; delete r.upgrades.condenser;
+  const r = setup(); delete r.gate; delete r.cells; delete r.workshop;
   g.normalize(r);
-  assert.strictEqual(r.gate, 0); assert.strictEqual(r.upgrades.condenser, 0);
+  assert.strictEqual(r.gate, 0); assert.strictEqual(r.workshop.conduits, 0);
   g.tick(r, 1000);
   assert.ok(g.view(r, 'a', new Set(['a']), 1000).gate.length === 3);
 });

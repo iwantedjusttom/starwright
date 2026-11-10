@@ -9,7 +9,6 @@ const UPGRADES = {
   mirrors: { name: 'Mirror Array', base: 14000, growth: 1.15, dps: 260, desc: '+260 stardust/sec' },
   cloth: { name: 'Polishing Cloth', base: 50, growth: 1.6, click: 1, desc: '+1 stardust per click' },
   ink: { name: 'Charting Ink', base: 500, growth: 1.8, chart: 0.25, desc: 'Auto-charting 25% faster' },
-  condenser: { name: 'Aether Condenser', base: 8000, growth: 2.4, needsGate: true, desc: '+1 Aether Cell every 20 min (fuel for Rift Runs)' },
 };
 
 // The Rift Gate is built once, in stages. Each stage needs stardust AND something stardust can't buy directly.
@@ -18,8 +17,23 @@ const GATE_STAGES = [
   { name: 'Focusing Ring', cost: 25000, need: 'Relight at least 1 constellation', met: (r) => r.level >= 1 },
   { name: 'Keystone', cost: 150000, need: 'Own 5 Observatory Domes', met: (r) => r.upgrades.dome >= 5 },
 ];
-const CELL_SECONDS = 20 * 60; // per condenser
 const CELL_CAP = 3;
+const CELL_AETHER = 300;
+
+// ---- Workshop: the crew routes part of its stardust/sec into machines that make new resources.
+// Prisms and Condensers eat routed stardust; Grinders eat their stockpiles.
+const MACHINES = {
+  prism: { name: 'Prism', base: 300, growth: 1.3, intake: 25, desc: 'Turns up to 25 stardust/s into Starlight (10 : 1)' },
+  condenser: { name: 'Condenser', base: 400, growth: 1.3, intake: 25, desc: 'Turns up to 25 stardust/s into Aether (25 : 1)' },
+  grinder: { name: 'Lens Grinder', base: 2500, growth: 1.35, desc: 'Every 10s: 20 Starlight + 10 Aether → 1 Crafted Lens' },
+};
+const STARLIGHT_PER_DUST = 1 / 10;
+const AETHER_PER_DUST = 1 / 25;
+const LENS_COST = { starlight: 20, aether: 10 };
+const LENS_SECONDS = 10;
+const LENS_INSTALL_BONUS = 0.03;
+const conduitCap = (room) => 50 * Math.pow(2, room.workshop.conduits);
+const conduitCost = (room) => Math.ceil(2000 * Math.pow(3, room.workshop.conduits));
 
 // Permanent perks bought with Starshards earned in Rift Runs.
 const PERKS = {
@@ -144,14 +158,35 @@ function newRoom(id, now = Date.now()) {
     puzzle: makePuzzle(0),
     players: {}, feed: [], notes: '',
     run: null, runsLaunched: 0, bestFloor: 0,
-    gate: 0, cells: 0, cellProgress: 0,
+    gate: 0, cells: 0,
+    workshop: newWorkshop(),
   };
   log(room, 'The observatory creaks open. Polish the lenses, chart the sky, and relight the first constellation.', now);
   return room;
 }
 
+function newWorkshop() {
+  return { machines: { prism: 0, condenser: 0, grinder: 0 }, route: { prism: 0, condenser: 0 },
+    conduits: 0, starlight: 0, aether: 0, lenses: 0, installed: 0, grindProgress: 0, rates: null };
+}
+
+// Gross production (before anything is routed to the Workshop).
 const dps = (room) => Object.entries(UPGRADES).reduce((s, [k, d]) => s + (d.dps || 0) * room.upgrades[k], 0)
-  * room.mult * (1 + 0.1 * room.perks.echo);
+  * room.mult * (1 + 0.1 * room.perks.echo) * (1 + LENS_INSTALL_BONUS * room.workshop.installed);
+
+// How much stardust/sec each feeder actually gets: limited by its slider, its machine count,
+// the conduit capacity (shared proportionally), and what the observatory actually produces.
+function flows(room) {
+  const w = room.workshop;
+  const want = {};
+  for (const k of ['prism', 'condenser']) want[k] = Math.max(0, Math.min(w.route[k] || 0, w.machines[k] * MACHINES[k].intake));
+  const total = want.prism + want.condenser;
+  const limit = Math.min(conduitCap(room), dps(room));
+  const scale = total > limit ? limit / total : 1;
+  const prism = want.prism * scale, condenser = want.condenser * scale;
+  return { prism, condenser, used: prism + condenser, cap: conduitCap(room) };
+}
+const netDps = (room) => dps(room) - flows(room).used;
 const clickPower = (room) => (1 + room.upgrades.cloth) * room.mult;
 const chartRate = (room) => (1 + 0.25 * room.upgrades.ink) * (1 + 0.2 * room.perks.cartographer) / BASE_CHART_SECONDS;
 const runCost = (room) => Math.max(500, Math.floor(dps(room) * 300)); // ~5 min of production, plus 1 Aether Cell
@@ -163,7 +198,12 @@ function normalize(room) {
   for (const k of Object.keys(PERKS)) if (room.perks[k] == null) room.perks[k] = 0;
   if (room.gate == null) room.gate = 0;
   if (room.cells == null) room.cells = 0;
-  if (room.cellProgress == null) room.cellProgress = 0;
+  delete room.cellProgress;
+  if (!room.workshop) room.workshop = newWorkshop();
+  if (room.upgrades.condenser) { // condensers from the timer-based version become Workshop condensers
+    room.workshop.machines.condenser += room.upgrades.condenser;
+  }
+  for (const k of Object.keys(room.upgrades)) if (!UPGRADES[k]) delete room.upgrades[k];
   return room;
 }
 
@@ -187,8 +227,10 @@ function ensurePlayer(room, pid, name, now = Date.now()) {
 function tick(room, now, online = new Set()) {
   const dt = Math.min(Math.max(0, (now - room.lastTick) / 1000), MAX_OFFLINE_SEC);
   room.lastTick = now;
-  const gain = dps(room) * dt;
+  const f = flows(room);
+  const gain = (dps(room) - f.used) * dt;
   room.dust += gain; room.totalDust += gain;
+  runWorkshop(room, f, dt);
 
   const p = room.puzzle;
   let charted = 0;
@@ -202,20 +244,37 @@ function tick(room, now, online = new Set()) {
   }
   if (charted && dt < 5) log(room, `✦ The charting engine fixed a star in place on the map.`, now);
 
-  if (gateDone(room) && room.upgrades.condenser > 0) {
-    if (room.cells < CELL_CAP) {
-      room.cellProgress += dt * room.upgrades.condenser / CELL_SECONDS;
-      const made = Math.min(Math.floor(room.cellProgress), CELL_CAP - room.cells);
-      if (made > 0) {
-        room.cells += made; room.cellProgress -= made;
-        if (dt < 5) log(room, `⚗ The condensers distilled an Aether Cell (${room.cells}/${CELL_CAP}).`, now);
-      }
-      if (room.cells >= CELL_CAP) room.cellProgress = 0;
-    } else room.cellProgress = 0;
-  }
-
   if (room.run) tickRun(room, now, dt, online);
   return { dt, gain, charted };
+}
+
+function runWorkshop(room, f, dt) {
+  const w = room.workshop;
+  w.starlight += f.prism * STARLIGHT_PER_DUST * dt;
+  w.aether += f.condenser * AETHER_PER_DUST * dt;
+  // Grinders: limited by machine time and by whichever input runs short.
+  let lenses = 0, starved = null;
+  if (w.machines.grinder > 0 && dt > 0) {
+    w.grindProgress += w.machines.grinder * dt / LENS_SECONDS;
+    const byStarlight = w.starlight / LENS_COST.starlight, byAether = w.aether / LENS_COST.aether;
+    const possible = Math.min(w.grindProgress, byStarlight, byAether);
+    if (possible < w.grindProgress) starved = byStarlight <= byAether ? 'starlight' : 'aether';
+    lenses = possible;
+    w.starlight -= possible * LENS_COST.starlight;
+    w.aether -= possible * LENS_COST.aether;
+    w.lenses += possible;
+    w.grindProgress = Math.min(w.grindProgress - possible, w.machines.grinder); // don't bank unlimited idle machine time
+  }
+  if (dt > 0 && dt < 5) w.rates = { starlight: f.prism * STARLIGHT_PER_DUST, aether: f.condenser * AETHER_PER_DUST, lenses: lenses / dt, starved };
+}
+
+function revealStar(room) {
+  const p = room.puzzle;
+  if (p.revealed >= p.chartOrder.length) return false;
+  p.board[p.chartOrder[p.revealed]] = 1;
+  p.revealed++;
+  if (p.revealed >= p.chartOrder.length) p.chartProgress = 0;
+  return true;
 }
 
 // ---------------------------------------------------------------- rift runs
@@ -361,12 +420,56 @@ function act(room, pid, msg, online, now = Date.now()) {
     case 'buy': {
       const def = UPGRADES[msg.key];
       if (!def) return 'No such upgrade.';
-      if (def.needsGate && !gateDone(room)) return 'Finish the Rift Gate first.';
       const c = cost(def, room.upgrades[msg.key]);
       if (room.dust < c) return 'Not enough stardust.';
       room.dust -= c; room.upgrades[msg.key]++;
       log(room, `${me.name} built a ${def.name} (#${room.upgrades[msg.key]}).`, now);
       return null;
+    }
+    case 'machine': {
+      const def = MACHINES[msg.key];
+      if (!def) return 'No such machine.';
+      const c = cost(def, room.workshop.machines[msg.key]);
+      if (room.dust < c) return 'Not enough stardust.';
+      room.dust -= c; room.workshop.machines[msg.key]++;
+      log(room, `🔧 ${me.name} built a ${def.name} (#${room.workshop.machines[msg.key]}).`, now);
+      return null;
+    }
+    case 'route': {
+      if (!['prism', 'condenser'].includes(msg.key)) return 'Can\'t route to that.';
+      const v = Math.max(0, Math.min(Number(msg.value) || 0, 1e15));
+      room.workshop.route[msg.key] = v;
+      return null;
+    }
+    case 'conduit': {
+      const c = conduitCost(room);
+      if (room.dust < c) return `Wider conduits cost ${c} stardust.`;
+      room.dust -= c; room.workshop.conduits++;
+      log(room, `🔧 ${me.name} widened the conduits to ${conduitCap(room)} stardust/s.`, now);
+      return null;
+    }
+    case 'pressCell': {
+      if (room.cells >= CELL_CAP) return 'Cell storage is full.';
+      if (room.workshop.aether < CELL_AETHER) return `Pressing a cell takes ${CELL_AETHER} Aether.`;
+      room.workshop.aether -= CELL_AETHER; room.cells++;
+      log(room, `⚗ ${me.name} pressed an Aether Cell (${room.cells}/${CELL_CAP}).`, now);
+      return null;
+    }
+    case 'lens': {
+      const w = room.workshop;
+      if (w.lenses < 1) return 'No Crafted Lenses yet.';
+      if (msg.use === 'install') {
+        w.lenses -= 1; w.installed++;
+        log(room, `🔭 ${me.name} installed a Crafted Lens: production +${Math.round(w.installed * LENS_INSTALL_BONUS * 100)}% total.`, now);
+        return null;
+      }
+      if (msg.use === 'reveal') {
+        if (!revealStar(room)) return 'Every star is already charted.';
+        w.lenses -= 1;
+        log(room, `🔭 ${me.name} used a Crafted Lens to chart a star.`, now);
+        return null;
+      }
+      return 'Unknown lens use.';
     }
     case 'gate': {
       const st = GATE_STAGES[room.gate];
@@ -479,12 +582,20 @@ function view(room, pid, online, now = Date.now()) {
     harmony: harmonyAt(room, now), level: room.level,
     constellation: CONSTELLATIONS[room.level % CONSTELLATIONS.length],
     solved: room.solved,
-    upgrades: Object.entries(UPGRADES).filter(([, d]) => !d.needsGate || gateDone(room))
-      .map(([key, d]) => ({ key, name: d.name, desc: d.desc, count: room.upgrades[key], cost: cost(d, room.upgrades[key]) })),
+    upgrades: Object.entries(UPGRADES).map(([key, d]) => ({ key, name: d.name, desc: d.desc, count: room.upgrades[key], cost: cost(d, room.upgrades[key]) })),
     gate: GATE_STAGES.map((st, i) => ({ name: st.name, cost: st.cost, need: st.need, met: st.met(room), built: i < room.gate })),
     gateDone: gateDone(room),
-    cells: room.cells, cellCap: CELL_CAP, condensers: room.upgrades.condenser,
-    nextCellSec: room.upgrades.condenser && room.cells < CELL_CAP ? (1 - room.cellProgress) * CELL_SECONDS / room.upgrades.condenser : null,
+    cells: room.cells, cellCap: CELL_CAP, cellAether: CELL_AETHER, netDps: netDps(room),
+    workshop: (() => {
+      const w = room.workshop, f = flows(room);
+      return {
+        machines: Object.entries(MACHINES).map(([key, d]) => ({ key, name: d.name, desc: d.desc, count: w.machines[key], cost: cost(d, w.machines[key]),
+          intake: d.intake ? d.intake * w.machines[key] : null, route: w.route[key] ?? null, flow: f[key] ?? null })),
+        used: f.used, cap: f.cap, conduitCost: conduitCost(room),
+        starlight: w.starlight, aether: w.aether, lenses: w.lenses, installed: w.installed,
+        installBonus: LENS_INSTALL_BONUS, rates: w.rates,
+      };
+    })(),
     perks: Object.entries(PERKS).map(([key, d]) => ({ key, name: d.name, desc: d.desc, count: room.perks[key], cost: cost(d, room.perks[key]) })),
     puzzle: {
       size: p.size, board: p.board, starCount: p.stars.length,

@@ -67,3 +67,9 @@ main { display:grid; grid-template-columns: 1fr 1.6fr 1fr; gap:1em; padding:1em;
 #toast.show { opacity:1; }
 
 .big.banner { width:100%; padding:1.2em; font-size:18px; text-align:center; border:1px dashed var(--line); border-radius:8px; color:var(--dim); user-select:none; }
+
+.machine input[type=range] { flex:1; accent-color: var(--violet); padding:0; }
+.routeval { min-width:5em; text-align:right; }
+button.small { padding:.2em .5em; font-size:12px; }
+.warn { color:#ffb86b; }
+.stock { display:grid; gap:.3em; }
