@@ -159,3 +159,4 @@ button.small { padding:.25em .55em; font-size:12px; }
 .unit { margin:.35em 0; font-size:14px; } .unit > span { margin-right:.6em; }
 .unit.destroyed { opacity:.5; } .unit.recalled { opacity:.7; }
 #recallSel { background:#0f1426; color:var(--ink); border:1px solid var(--line); border-radius:6px; padding:.2em; }
+.formation { font-size:13px; color:#7ee787; border:1px solid #7ee787; border-radius:6px; padding:0 .4em; margin-left:.4em; }

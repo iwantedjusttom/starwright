@@ -433,7 +433,7 @@ function renderRift() {
 
   if (Y.diving) {
     const e = D.enemy;
-    setHTML($('rift'), `<h2>The Rift · Tier ${D.tier} · Floor ${D.floor}</h2>
+    setHTML($('rift'), `<h2>The Rift · Tier ${D.tier} · Floor ${D.floor}${D.formation > 1 ? ` <span class="formation">Formation ×${D.formation.toFixed(2)}</span>` : ''}</h2>
       ${e ? `<div class="enemy ${e.boss ? 'boss' : ''}"><div class="name">${e.boss ? '☠ ' : ''}${esc(e.name)}</div>
         <div class="bar hp"><div style="width:${100 * e.hp / e.maxHp}%"></div></div><div class="dim">${fmt(e.hp)} / ${fmt(e.maxHp)} · hits for ${e.atk}</div></div>`
         : '<div class="enemy"><div class="name" style="color:#7ee787">Descending…</div><div class="bar"><div></div></div><div>&nbsp;</div></div>'}
@@ -453,7 +453,8 @@ function renderRift() {
   setHTML($('rift'), `<h2>The Rift</h2>${summary}
     ${D ? `<p><b>A Tier ${D.tier} dive is underway</b> (floor ${D.floor}).</p>${units(D)}` : `<p>Send your machine into the Rift. It fights on its own, floor by floor, and keeps going while you're away.
       Every kill drops runes (mostly your element) and sometimes components; bosses always drop a component.
-      If it's destroyed, it keeps only half of what it found and each installed part has a 30% chance to be lost.</p>
+      If it's destroyed, it keeps only half of what it found and each installed part has a 30% chance to be lost.
+      <b>Each tier is a big step up</b>: dive together, since every extra machine gives the whole team <b>+15% damage</b> (Formation) and enemies grow slower than your crew does.</p>
       <div class="row tiers">${Array.from({ length: t }, (_, i) => `<button data-act="tier" data-tier="${i + 1}" class="small ${i + 1 === selectedTier ? 'on-tier' : 'ghost'}">Tier ${i + 1}</button>`).join('')}
         </div>
       <p class="dim small">Tiers unlock when any crew machine reaches: ${S.tiers.ladder.map((l) => `Tier ${l.tier} at <b>${fmt(l.req)}</b>`).join(' · ')}.

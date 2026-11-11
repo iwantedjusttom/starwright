@@ -36,6 +36,8 @@ const LINK_WINDOW_MS = 600;
 const LOSE_ITEM_CHANCE = 0.3; // when a machine is destroyed, each installed component (and each rune) may be lost
 const OWN_ELEMENT_CHANCE = 0.7;
 const MAX_W = 7, MAX_H = 6;
+const TIER_HP = 2.6, TIER_ATK = 1.75; // how much tougher each Rift Tier is
+const FORMATION = 0.15;
 const VERSION = 5;
 
 // Resonance a machine needs to unlock each Rift Tier: 30, 75, 135, 210, 300, 405, 525, 660, 810 …
@@ -50,7 +52,7 @@ const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 const runeName = (r) => `${ELEMENTS[r.el].name} ${ROMAN[r.rank]}`;
 const compName = (it) => `${COMPONENTS[it.type].name}${it.lvl > 1 ? ' +' + (it.lvl - 1) : ''}`;
 const refOf = (pid) => crypto.createHash('sha1').update(String(pid)).digest('hex').slice(0, 8); // public handle; pids stay private
-const expandCost = (m) => Math.ceil(400 * Math.pow(3, m.w + m.h - 7));
+const expandCost = (m) => Math.ceil(50000 * Math.pow(6, m.w + m.h - 7)); // 50K, 300K, 1.8M, 10.8M, 65M, 389M
 
 function log(room, text, now = Date.now()) {
   room.feed.push({ t: now, text });
@@ -165,10 +167,11 @@ const fighting = (dive) => Object.entries(dive.units).filter(([, u]) => u.status
 function spawnEnemy(dive, t) {
   const f = dive.floor, tier = dive.tier, boss = f % 5 === 0;
   const n = fighting(dive).length;
-  const maxHp = Math.round(180 * Math.pow(1.25, f - 1) * Math.pow(1.6, tier - 1) * (0.6 + 0.4 * n) * (boss ? 3 : 1));
+  // Each tier is a big step up; extra machines add less enemy HP than they add damage, so crews dive deeper than solo players.
+  const maxHp = Math.round(180 * Math.pow(1.25, f - 1) * Math.pow(TIER_HP, tier - 1) * (0.7 + 0.25 * n) * (boss ? 3 : 1));
   dive.enemy = {
     name: boss ? pick(BOSSES) : pick(ENEMIES), boss, hp: maxHp, maxHp,
-    atk: Math.round(5 * Math.pow(1.15, f - 1) * Math.pow(1.35, tier - 1) * (boss ? 1.5 : 1)),
+    atk: Math.round(5 * Math.pow(1.15, f - 1) * Math.pow(TIER_ATK, tier - 1) * (boss ? 1.5 : 1)),
     nextAttackAt: t + ENEMY_ATTACK_MS,
   };
   dive.links = [];
@@ -237,7 +240,8 @@ function simulateDive(room, now, online) {
     if (dive.pauseUntil > t) continue;
     if (!dive.enemy) { spawnEnemy(dive, t); dive.nextLinkAt = t + 2000 + Math.random() * 2000; }
     const e = dive.enemy;
-    for (const [, u] of fighting(dive)) e.hp -= u.stats.dmg * (1 + u.charge) * sec;
+    const formation = 1 + FORMATION * (fighting(dive).length - 1); // every other machine in the dive: +15% damage for all
+    for (const [, u] of fighting(dive)) e.hp -= u.stats.dmg * (1 + u.charge) * formation * sec;
     if (e.hp <= 0) { killEnemy(room, dive, t); continue; }
     if (t >= dive.nextLinkAt) {
       spawnLink(dive, online, t);
@@ -511,7 +515,7 @@ function view(room, pid, online, now = Date.now()) {
     feed: room.feed.slice(-40),
     bestFloor: room.bestFloor,
     dive: dive && {
-      tier: dive.tier, floor: dive.floor, paused: !dive.enemy,
+      tier: dive.tier, floor: dive.floor, paused: !dive.enemy, formation: 1 + FORMATION * Math.max(0, fighting(dive).length - 1),
       enemy: dive.enemy && { name: dive.enemy.name, boss: dive.enemy.boss, hp: Math.max(0, dive.enemy.hp), maxHp: dive.enemy.maxHp, atk: dive.enemy.atk },
       units: Object.entries(dive.units).map(([id, u]) => ({ name: nameOf(id), el: room.players[id]?.el, me: id === pid, status: u.status,
         hp: Math.max(0, u.hp), maxHp: u.stats.hp, dmg: u.stats.dmg, charge: u.charge, runes: u.loot.runes.length, comps: u.loot.comps.length })),

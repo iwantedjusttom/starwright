@@ -203,3 +203,31 @@ test('stardust upgrades components and buys component crates', () => {
   assert.strictEqual(r.players.a.storage.length, 2);
   assert.strictEqual(r.dust, 1e7 - 3000 - 5000 - 8000);
 });
+
+test('inventory space is expensive: 50K, then 6× per expansion', () => {
+  const r = setup(); armed(r, 'a');
+  r.dust = 49999;
+  assert.match(g.act(r, 'a', { type: 'expand', dir: 'w' }, solo, 0), /50,000/);
+  r.dust = 1e9;
+  g.act(r, 'a', { type: 'expand', dir: 'w' }, solo, 0);
+  g.act(r, 'a', { type: 'expand', dir: 'h' }, solo, 0);
+  assert.strictEqual(r.dust, 1e9 - 50000 - 300000);
+  assert.strictEqual(g.view(r, 'a', solo, 0).you.expandCost, 1800000);
+});
+
+test('formation: machines diving together hit harder than the same machines alone', () => {
+  const dmgIn = (n) => {
+    const r = g.newRoom('f', 0); const on = new Set();
+    for (let i = 0; i < n; i++) { g.ensurePlayer(r, 'p' + i, 'P' + i, 0); on.add('p' + i); armed(r, 'p' + i); }
+    r.dust = 1e9;
+    for (const id of on) g.act(r, id, { type: 'dive' }, on, 0);
+    g.tick(r, 1500, on); // enemy spawns
+    r.dive.enemy.hp = r.dive.enemy.maxHp = 1e9;
+    const before = r.dive.enemy.hp;
+    g.tick(r, 2500, on);
+    return { perMachine: (before - r.dive.enemy.hp) / n, view: g.view(r, 'p0', on, 2500).dive.formation };
+  };
+  const one = dmgIn(1), three = dmgIn(3);
+  assert.ok(Math.abs(three.perMachine / one.perMachine - 1.3) < 1e-6);
+  assert.strictEqual(three.view, 1.3);
+});
