@@ -40,20 +40,19 @@ const TIER_HP = 2.6, TIER_ATK = 1.75; // how much tougher each Rift Tier is
 const FORMATION = 0.15;
 const BLOCK_WINDOW_MS = 1500; // the shield target shows up this long before an enemy attack lands
 const MAX_CHARGE = 5;
-const VERSION = 5;
+const VERSION = 6;
 
 // Resonance a machine needs to unlock each Rift Tier: 30, 66, 145, 320, 700, 1.5K, 3.4K, 7.5K …
 // (×2.2 per tier, because machine power grows multiplicatively: each rune rank doubles a socket, each level adds 50%)
 const tierReq = (t) => (t <= 1 ? 0 : Math.round(30 * Math.pow(2.2, t - 2)));
 const tierFor = (res) => { let t = 1; while (res >= tierReq(t + 1)) t++; return t; };
-const crateCost = (p) => Math.ceil(5000 * Math.pow(1.6, p.crates || 0));
 
 // ---------------------------------------------------------------- helpers
 const shuffle = (a) => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
 const cost = (def, n) => Math.ceil(def.base * Math.pow(def.growth, n));
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 const runeName = (r) => `${ELEMENTS[r.el].name} ${ROMAN[r.rank]}`;
-const compName = (it) => `${COMPONENTS[it.type].name}${it.lvl > 1 ? ' +' + (it.lvl - 1) : ''}`;
+const compName = (it) => `${Engine.itemName(it)}${it.lvl > 1 ? ' +' + (it.lvl - 1) : ''}`;
 const refOf = (pid) => crypto.createHash('sha1').update(String(pid)).digest('hex').slice(0, 8); // public handle; pids stay private
 const expandCost = (m) => Math.ceil(50000 * Math.pow(6, m.w + m.h - 7)); // 50K, 300K, 1.8M, 10.8M, 65M, 389M
 
@@ -63,14 +62,19 @@ function log(room, text, now = Date.now()) {
 }
 const nextId = (room) => (room.nextId = (room.nextId || 1) + 1);
 const newRune = (room, el, rank) => ({ id: nextId(room), el, rank });
-const newItem = (room, type, lvl = 1) => ({ id: nextId(room), type, lvl, x: 0, y: 0, rot: 0, runes: COMPONENTS[type].sockets.map(() => null) });
+const newItem = (room, type, lvl = 1) => ({ id: nextId(room), type, lvl, x: 0, y: 0, rot: 0, rarity: 'common', mods: [], runes: COMPONENTS[type].sockets.map(() => null) });
+// A random drop from the Rift: rarity, socket elements and modifiers are rolled (deeper tiers and bosses roll better).
+const dropItem = (room, tier, boss) => Object.assign(Engine.rollItem(pick(COMPONENT_KEYS), Math.random, tier - 1 + (boss ? 2 : 0)),
+  { id: nextId(room), x: 0, y: 0, rot: 0, runes: null });
+const withRunes = (it) => Object.assign(it, { runes: COMPONENTS[it.type].sockets.map(() => null) });
+const RARITY_NAMES = Object.fromEntries(Object.entries(Engine.RARITIES).map(([k, r]) => [k, r.name]));
 
 // A working starter machine (runes not yet socketed — that's the first thing to do).
 function starterMachine(room) {
   const place = (type, x, y, rot = 0) => Object.assign(newItem(room, type), { x, y, rot });
   return { w: 4, h: 3, items: [place('lance', 0, 0), place('coil', 3, 0), place('shield', 0, 1), place('pump', 2, 1)] };
 }
-const newPlayer = (name, now) => ({ name, el: null, pouch: [], storage: [], machine: null, recallPct: 0.3, crates: 0,
+const newPlayer = (name, now) => ({ name, el: null, pouch: [], storage: [], machine: null, recallPct: 0.3, essence: 0,
   contributed: 0, clicks: 0, lastClick: 0, lastSeen: now, lastDive: null });
 
 // ---------------------------------------------------------------- room
@@ -92,11 +96,20 @@ function normalize(room) {
   if (room.version === VERSION) return room;
   if (room.version === 4) {
     // The tier curve changed: recompute from the machines the crew actually has.
-    room.version = VERSION;
+    room.version = 5;
     const was = room.maxTier;
     room.maxTier = tierFor(bestResonance(room));
-    for (const p of Object.values(room.players)) p.crates = p.crates || 0;
-    log(room, `🧭 Rift Tiers were re-measured for machines: your strongest machine opens up to Tier ${room.maxTier}${was !== room.maxTier ? ` (was ${was})` : ''}. Stardust can now upgrade components and buy component crates.`, room.lastTick);
+    log(room, `🧭 Rift Tiers were re-measured for machines: your strongest machine opens up to Tier ${room.maxTier}${was !== room.maxTier ? ` (was ${was})` : ''}.`, room.lastTick);
+  }
+  if (room.version === 5) {
+    // Loot update: components gain rarity; runes and spare components can be salvaged into Essence for upgrades.
+    room.version = VERSION;
+    for (const p of Object.values(room.players)) {
+      p.essence = p.essence || 0;
+      delete p.crates;
+      for (const it of [...(p.machine?.items || []), ...p.storage]) { it.rarity = it.rarity || 'common'; it.mods = it.mods || []; }
+    }
+    log(room, '🎲 Components now drop with random rarities, sockets and modifiers. Salvage spare runes and components into Essence to upgrade the ones you love.', room.lastTick);
     return room;
   }
   const fresh = newRoom(room.id, room.lastTick || Date.now());
@@ -204,8 +217,8 @@ function killEnemy(room, dive, t) {
     const runes = 1 + (boss ? 1 : 0) + (Math.random() < u.stats.loot ? 1 : 0);
     for (let i = 0; i < runes; i++) { const r = dropRune(room, pid, dive.tier, boss); u.loot.runes.push(r); found.push(runeName(r)); }
     if (boss || Math.random() < 0.15) {
-      const it = newItem(room, pick(COMPONENT_KEYS), Math.min(MAX_LEVEL, 1 + Math.floor((dive.tier - 1) / 3)));
-      u.loot.comps.push(it); found.push(compName(it));
+      const it = withRunes(dropItem(room, dive.tier, boss));
+      u.loot.comps.push(it); found.push(`${compName(it)} (${RARITY_NAMES[it.rarity]})`);
     }
   }
   log(room, `⚔ Floor ${dive.floor}: ${dive.enemy.name} shattered! Found: ${found.join(', ')}.`, t);
@@ -254,7 +267,7 @@ function simulateDive(room, now, online) {
     if (!dive.enemy) { spawnEnemy(dive, t); dive.nextLinkAt = t + 2000 + Math.random() * 2000; }
     const e = dive.enemy;
     const formation = 1 + FORMATION * (fighting(dive).length - 1); // every other machine in the dive: +15% damage for all
-    for (const [, u] of fighting(dive)) e.hp -= u.stats.dmg * (1 + u.charge) * formation * sec;
+    for (const [, u] of fighting(dive)) e.hp -= (u.stats.dmg + (e.boss ? u.stats.bossDmg || 0 : 0)) * (1 + u.charge) * formation * sec;
     if (e.hp <= 0) { killEnemy(room, dive, t); continue; }
     if (t >= dive.nextLinkAt) {
       spawnLink(dive, online, t);
@@ -410,36 +423,36 @@ function act(room, pid, msg, online, now = Date.now()) {
       log(room, `🔮 ${me.name} fused three runes into ${runeName(made)}.`, now);
       return null;
     }
-    case 'fuseComps': { // three identical components in storage → one of the next level (their runes go back to the pouch)
-      const lvl = msg.lvl | 0;
-      if (!COMPONENTS[msg.compType] || lvl < 1 || lvl >= MAX_LEVEL) return 'Can\'t upgrade that.';
-      const same = me.storage.filter((it) => it.type === msg.compType && it.lvl === lvl);
-      if (same.length < 3) return 'Upgrading takes 3 identical components in storage.';
-      for (const it of same.slice(0, 3)) { me.pouch.push(...it.runes.filter(Boolean)); me.storage.splice(me.storage.indexOf(it), 1); }
-      const made = newItem(room, msg.compType, lvl + 1);
-      me.storage.push(made);
-      log(room, `⚙ ${me.name} forged three components into ${compName(made)}.`, now);
+    case 'salvage': { // break runes or a stored component down into Essence
+      if (msg.itemId) {
+        const it = me.storage.find((o) => o.id === msg.itemId);
+        if (!it) return 'Only components in storage can be salvaged.';
+        me.storage.splice(me.storage.indexOf(it), 1);
+        me.pouch.push(...it.runes.filter(Boolean));
+        const got = Engine.itemEssence(it);
+        me.essence += got;
+        log(room, `♻ ${me.name} salvaged ${compName(it)} for ${got} Essence.`, now);
+        return null;
+      }
+      const ids = new Set(msg.runeIds || [msg.runeId]);
+      const gone = me.pouch.filter((r) => ids.has(r.id));
+      if (!gone.length) return null;
+      me.pouch = me.pouch.filter((r) => !ids.has(r.id));
+      const got = gone.reduce((s, r) => s + Engine.runeEssence(r), 0);
+      me.essence += got;
       return null;
     }
-    case 'upgrade': { // spend stardust to raise a component's level
+    case 'upgrade': { // Essence + stardust raise a component's level
       const it = findItem(msg.itemId);
       if (!it) return 'You don\'t have that component.';
       if (diving && m.items.includes(it)) return 'Your machine is in the Rift. Recall it to make changes.';
       if (it.lvl >= MAX_LEVEL) return 'That component is already at its highest level.';
       const c = Engine.upgradeCost(it);
-      if (room.dust < c) return `Upgrading costs ${c.toLocaleString()} stardust.`;
-      room.dust -= c; it.lvl++;
+      if (me.essence < c.essence) return `Upgrading needs ${c.essence} Essence. Salvage spare runes or components to get more.`;
+      if (room.dust < c.dust) return `Upgrading also costs ${c.dust.toLocaleString()} stardust.`;
+      me.essence -= c.essence; room.dust -= c.dust; it.lvl++;
       if (m && m.items.includes(it)) changed(`upgraded ${compName(it)}`);
       else log(room, `⚙ ${me.name} upgraded a stored ${compName(it)}.`, now);
-      return null;
-    }
-    case 'crate': { // spend stardust on a random new component
-      const c = crateCost(me);
-      if (room.dust < c) return `A component crate costs ${c.toLocaleString()} stardust.`;
-      room.dust -= c; me.crates = (me.crates || 0) + 1;
-      const it = newItem(room, pick(COMPONENT_KEYS));
-      me.storage.push(it);
-      log(room, `📦 ${me.name} opened a component crate: ${compName(it)}!`, now);
       return null;
     }
     case 'expand': {
@@ -533,7 +546,7 @@ function view(room, pid, online, now = Date.now()) {
     tiers: { max: room.maxTier, nextReq: tierReq(room.maxTier + 1), ladder: Array.from({ length: 4 }, (_, i) => ({ tier: room.maxTier + 1 + i, req: tierReq(room.maxTier + 1 + i) })), costs: Array.from({ length: room.maxTier }, (_, i) => diveCost(room, i + 1)) },
     you: {
       pid, ref: refOf(pid), name: me.name, el: me.el, pouch: me.pouch, storage: me.storage, machine: me.machine,
-      recallPct: me.recallPct, expandCost: me.machine ? expandCost(me.machine) : 0, maxW: MAX_W, maxH: MAX_H, crateCost: crateCost(me),
+      recallPct: me.recallPct, expandCost: me.machine ? expandCost(me.machine) : 0, maxW: MAX_W, maxH: MAX_H, essence: me.essence || 0,
       lastDive: me.lastDive, diving: myUnit?.status === 'fighting',
     },
     players: Object.entries(room.players).map(([id, pl]) => ({ ref: refOf(id), name: pl.name, el: pl.el, online: online.has(id),

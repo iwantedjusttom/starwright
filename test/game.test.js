@@ -73,17 +73,14 @@ test('choosing an element builds a starter machine; socketing, storing and placi
   assert.strictEqual(coil.runes[0].id, ember.id, 'runes stay in a component when it moves');
 });
 
-test('fusing runes and components, expanding the machine, giving to a friend', () => {
+test('fusing runes, expanding the machine, giving to a friend', () => {
   const r = setup(); r.dust = 1e6;
   g.act(r, 'a', { type: 'element', el: 'tide' }, solo, 0);
   const p = r.players.a;
   p.pouch = [rune('tide'), rune('tide'), rune('tide')];
   g.act(r, 'a', { type: 'fuseRunes', el: 'tide', rank: 1 }, solo, 0);
   assert.deepStrictEqual(p.pouch.map((q) => q.rank), [2]);
-  p.storage = [item(10, 'pump', 0, 0, 0, [rune('tide'), null]), item(11, 'pump', 0, 0), item(12, 'pump', 0, 0)];
-  g.act(r, 'a', { type: 'fuseComps', compType: 'pump', lvl: 1 }, solo, 0);
-  assert.strictEqual(p.storage.length, 1); assert.strictEqual(p.storage[0].lvl, 2);
-  assert.strictEqual(p.pouch.length, 2, 'runes inside fused components come back');
+  p.storage = [item(10, 'pump', 0, 0, 0, [rune('tide'), null], 2)];
   g.act(r, 'a', { type: 'expand', dir: 'w' }, solo, 0);
   assert.strictEqual(p.machine.w, 5);
   g.act(r, 'a', { type: 'give', itemId: p.storage[0].id, to: g.refOf('b') }, both, 0);
@@ -166,7 +163,7 @@ test('worlds from older versions keep stardust, buildings, players, elements and
     engine: { size: 3, grid: [{ id: 7, el: 'sun', rank: 2 }, null] },
     players: { a: { name: 'Ann', el: 'moon', pouch: [{ id: 8, el: 'moon', rank: 1 }] }, b: { name: 'Bo', el: null, pouch: [] } }, feed: [], bestFloor: 6 };
   const r = g.normalize(old);
-  assert.strictEqual(r.version, 5);
+  assert.strictEqual(r.version, 6);
   assert.strictEqual(r.dust, 5000);
   assert.strictEqual(r.maxTier, 1, 'tiers are re-measured from actual machines (starters have no runes socketed)');
   assert.strictEqual(r.players.a.el, 'moon');
@@ -183,25 +180,60 @@ test('tier curve: 30, 66, 145, 319, … (×2.2); worlds from the Star Engine era
   r.version = 4; r.maxTier = 7; // a v4 save carried over an old-scale tier
   const res = g.machineStats(r.players.a).resonance;
   g.normalize(r);
-  assert.strictEqual(r.version, 5);
+  assert.strictEqual(r.version, 6);
   assert.strictEqual(r.maxTier, g.tierFor(res));
-  assert.match(r.feed.at(-1).text, /re-measured/);
+  assert.strictEqual(r.players.a.essence, 0);
+  assert.strictEqual(r.players.a.machine.items[0].rarity, 'common');
+  assert.ok(r.feed.some((f) => /re-measured/.test(f.text)));
 });
 
-test('stardust upgrades components and buys component crates', () => {
-  const r = setup(); const m = armed(r, 'a');
+test('salvaging runes and components into Essence; upgrades cost Essence + stardust', () => {
+  const r = setup(); const m = armed(r, 'a'); const p = r.players.a;
+  p.pouch = [rune('tide', 1), rune('tide', 3)];
+  g.act(r, 'a', { type: 'salvage', runeIds: p.pouch.map((q) => q.id) }, solo, 0);
+  assert.strictEqual(p.essence, 1 + 9);
+  p.storage = [{ ...item(20, 'coil', 0, 0, 0, [rune('ember')], 2), rarity: 'epic', mods: [] }];
+  g.act(r, 'a', { type: 'salvage', itemId: 20 }, solo, 0);
+  assert.strictEqual(p.essence, 10 + 60, 'epic (30) × level 2');
+  assert.strictEqual(p.pouch.length, 1, 'its rune came back');
   const lance = m.items.find((it) => it.type === 'lance');
-  const dmg = g.machineStats(r.players.a).dmg;
-  assert.match(g.act(r, 'a', { type: 'upgrade', itemId: lance.id }, solo, 0), /3,000 stardust/);
-  r.dust = 1e7;
+  r.dust = 1e9; p.essence = 5;
+  assert.match(g.act(r, 'a', { type: 'upgrade', itemId: lance.id }, solo, 0), /12 Essence/);
+  p.essence = 100;
   g.act(r, 'a', { type: 'upgrade', itemId: lance.id }, solo, 0);
   assert.strictEqual(lance.lvl, 2);
-  assert.strictEqual(r.dust, 1e7 - 3000);
-  assert.ok(Math.abs(g.machineStats(r.players.a).dmg - (dmg + 3)) < 1e-9); // the Lance goes from 6 to 9 damage/s
-  g.act(r, 'a', { type: 'crate' }, solo, 0);
-  g.act(r, 'a', { type: 'crate' }, solo, 0);
-  assert.strictEqual(r.players.a.storage.length, 2);
-  assert.strictEqual(r.dust, 1e7 - 3000 - 5000 - 8000);
+  assert.strictEqual(p.essence, 88); assert.strictEqual(r.dust, 1e9 - 3000);
+  assert.match(g.act(r, 'a', { type: 'crate' }, solo, 0), /Unknown/);
+});
+
+test('rolled components: rarities, random sockets and modifiers that change stats', () => {
+  let s = 7; const rng = () => (s = (s * 16807) % 2147483647) / 2147483647;
+  const counts = {};
+  for (let i = 0; i < 3000; i++) { const it = Engine.rollItem('lance', rng, 0); counts[it.rarity] = (counts[it.rarity] || 0) + 1; assert.strictEqual(it.mods.length, Engine.RARITIES[it.rarity].mods); }
+  assert.ok(counts.common > counts.uncommon && counts.uncommon > counts.rare && counts.rare > counts.epic);
+  const deep = {}; for (let i = 0; i < 3000; i++) { const it = Engine.rollItem('lance', rng, 8); deep[it.rarity] = (deep[it.rarity] || 0) + 1; }
+  assert.ok((deep.legendary || 0) > (counts.legendary || 0) * 5, 'deeper tiers roll rarer loot');
+  // modifiers
+  const base = (mods, runes, sockEls) => Engine.stats({ w: 3, h: 1, items: [{ ...item(1, 'lance', 0, 0, 0, runes), mods, sockEls }] });
+  const full = [rune('sun'), rune('ember'), rune('sun')];
+  assert.ok(Math.abs(base([{ k: 'overcharged', v: 20 }], full).dmg - 7.2) < 1e-9);
+  assert.ok(Math.abs(base([{ k: 'titan', v: 50 }], full).bossDmg - 3) < 1e-9);
+  const wrong = [rune('moon'), rune('moon'), rune('moon')];
+  assert.ok(Math.abs(base([{ k: 'harmony', v: 80 }], wrong).dmg - 6 * 0.8) < 1e-9);
+  assert.strictEqual(base([], wrong, ['moon', 'moon', 'moon']).dmg, 6, 'an item whose sockets rolled Moon wants Moon');
+  assert.strictEqual(Engine.itemName({ type: 'lance', mods: [{ k: 'volatile', v: 30 }, { k: 'titan', v: 50 }] }), 'Volatile Prism Lance of the Titan');
+});
+
+test('boss kills drop rolled components', () => {
+  const r = setup(); r.dust = 1e9; armed(r, 'a');
+  g.act(r, 'a', { type: 'dive' }, solo, 0);
+  r.dive.floor = 5; r.dive.units.a.stats.hp = r.dive.units.a.hp = 1e9;
+  g.tick(r, 1500, solo);
+  assert.ok(r.dive.enemy.boss);
+  r.dive.enemy.hp = 1;
+  g.tick(r, 1750, solo);
+  const c = r.dive.units.a.loot.comps[0];
+  assert.ok(c && Engine.RARITIES[c.rarity] && Array.isArray(c.mods) && c.runes.length === Engine.COMPONENTS[c.type].sockets.length);
 });
 
 test('inventory space is expensive: 50K, then 6× per expansion', () => {

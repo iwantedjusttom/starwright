@@ -12,7 +12,10 @@ A cooperative multiplayer idle game for a small group of friends (1–5 players)
    with **rune sockets** that want certain elements: a matching rune powers them fully, a different element at 40%,
    higher-rank runes are worth more. Many components **boost the components they touch** (capacitors power up
    adjacent weapons, coils chain, a Void Core strengthens everything around it but costs HP…), so packing and placement matter.
-   Three identical components forge into a stronger one; three identical runes fuse into the next rank.
+   **Every component from the Rift is rolled** (Borderlands-style): a rarity (Common → Legendary), its own socket
+   elements, and random modifiers (Overcharged, Volatile, Reinforced, Lucky, … of Resonance, of the Pack, of the Titan,
+   of Harmony). Rarer drops come from deeper tiers and bosses. Salvage spare runes and components into **Essence**, and
+   spend Essence + stardust to upgrade the components you keep. Three identical runes fuse into the next rank.
    Your machine's total power is its **Resonance**, and reaching thresholds unlocks harder **Rift Tiers**.
 3. **The Rift:** send your machine in (friends can join the same dive). It fights floor by floor on its own and keeps going
    while you're away, coming home by itself at the HP threshold you choose. While it fights, you can click targets to

@@ -79,13 +79,17 @@ function toast(t) { $('toast').textContent = t; $('toast').classList.add('show')
 const EL = Engine.ELEMENTS, COMP = Engine.COMPONENTS;
 const R = Engine.ROMAN;
 const runeChip = (r, extra = '') => `<span class="rune el-${r.el} ${extra}" data-rune="${r.id}" title="${EL[r.el].name} ${R[r.rank]}">${EL[r.el].icon}<sub>${R[r.rank]}</sub></span>`;
-const compTitle = (it) => `${COMP[it.type].name}${it.lvl > 1 ? ` <span class="gold">+${it.lvl - 1}</span>` : ''}`;
+const RAR = Engine.RARITIES;
+const compTitle = (it) => `<span style="color:${RAR[it.rarity || 'common'].color}">${esc(Engine.itemName(it))}</span>${it.lvl > 1 ? ` <span class="gold">+${it.lvl - 1}</span>` : ''}`;
+const modList = (it) => (it.mods || []).map((m) => `<li>${esc(Engine.MODS[m.k].text(m.v))}</li>`).join('');
+const costLabel = (c) => `${fmt(c.essence)} ✦ + ${fmt(c.dust)} ✧`;
+const canAfford = (c) => (S.you.essence || 0) >= c.essence && S.dust >= c.dust;
 const me = () => S.you;
 const allItems = () => [...(me().machine?.items || []), ...me().storage];
 const findItem = (id) => allItems().find((it) => it.id === id);
-function miniShape(type, rot = 0) {
+function miniShape(type, rot = 0, it = null) {
   const cells = Engine.cellsFor(type, rot), w = Math.max(...cells.map((c) => c[0])) + 1, h = Math.max(...cells.map((c) => c[1])) + 1;
-  const socketAt = new Map(COMP[type].sockets.map((s) => [s.c, s.el]));
+  const socketAt = new Map((it ? Engine.socketsOf(it) : COMP[type].sockets).map((s) => [s.c, s.el]));
   let out = `<span class="mini" style="grid-template-columns:repeat(${w},12px)">`;
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
     const i = cells.findIndex(([cx, cy]) => cx === x && cy === y);
@@ -105,7 +109,7 @@ function trialMachine() {
     const rest = items.filter((it) => it.id !== held.id);
     return { m: { ...m, items: [...rest, { ...src, runes: [...src.runes], x, y, rot: held.rot }] }, ok: null };
   }
-  const sock = socketAt(x, y); if (!sock) return null;
+  const sock = socketAt(x, y); if (!sock || sock.s < 0) return null;
   const rune = me().pouch.find((r) => r.id === held.id); if (!rune) return null;
   const it = items.find((o) => o.id === sock.item.id);
   it.runes[sock.s] = rune;
@@ -118,7 +122,7 @@ function socketAt(x, y) {
     const cells = Engine.cellsFor(it.type, it.rot);
     const ci = cells.findIndex(([cx, cy]) => it.x + cx === x && it.y + cy === y);
     if (ci < 0) continue;
-    const s = COMP[it.type].sockets.findIndex((sk) => sk.c === ci);
+    const s = Engine.socketsOf(it).findIndex((sk) => sk.c === ci);
     return s < 0 ? { item: it, s: -1 } : { item: it, s };
   }
   return null;
@@ -143,15 +147,16 @@ $('pouch').onclick = (e) => {
 };
 $('storage').onclick = (e) => {
   const b = e.target.closest('button');
-  if (b?.dataset.fuse) { const [type, lvl] = b.dataset.fuse.split(':'); send({ type: 'fuseComps', compType: type, lvl: +lvl }); return; }
   if (b?.dataset.upgrade) { send({ type: 'upgrade', itemId: +b.dataset.upgrade }); return; }
-  if (b?.dataset.crate) { send({ type: 'crate' }); return; }
+  if (b?.dataset.salvage) { if (confirm('Salvage this component into Essence? Any runes in it go back to your pouch.')) send({ type: 'salvage', itemId: +b.dataset.salvage }); return; }
   const id = +e.target.closest('[data-item]')?.dataset.item; if (!id) return;
   held = held?.kind === 'comp' && held.id === id ? null : { kind: 'comp', id, rot: 0 }; focusId = null; render();
 };
 $('pouchActions').onclick = (e) => {
   const b = e.target.closest('button'); if (!b) return;
   if (b.dataset.fuse) { const [el, rank] = b.dataset.fuse.split(':'); send({ type: 'fuseRunes', el, rank: +rank }); }
+  if (b.dataset.act === 'salvageRune') { send({ type: 'salvage', runeId: held.id }); held = null; }
+  if (b.dataset.act === 'salvageI') { const ids = me().pouch.filter((r) => r.rank === 1 && r.el !== me().el).map((r) => r.id); if (ids.length && confirm(`Salvage ${ids.length} rank I rune(s) that aren't your element?`)) send({ type: 'salvage', runeIds: ids }); }
   if (b.dataset.give) { send({ type: 'give', [held.kind === 'rune' ? 'runeId' : 'itemId']: held.id, to: b.dataset.give }); held = null; }
   if (b.dataset.act === 'rotate') rotateHeld();
   if (b.dataset.act === 'drop') { held = null; render(); }
@@ -360,16 +365,17 @@ function renderMachine() {
       if (it.id === focusId) cls.push('focused');
       const same = (dx, dy) => { const nx = x + dx, ny = y + dy; return nx >= 0 && ny >= 0 && nx < m.w && ny < m.h && occ[ny * m.w + nx] === it.id; };
       if (!same(0, -1)) cls.push('bt'); if (!same(0, 1)) cls.push('bb'); if (!same(-1, 0)) cls.push('bl'); if (!same(1, 0)) cls.push('br');
-      const s = def.sockets.findIndex((sk) => sk.c === ci);
+      const socks = Engine.socketsOf(it);
+      const s = socks.findIndex((sk) => sk.c === ci);
       if (s >= 0) {
-        const r = it.runes[s], want = def.sockets[s].el;
+        const r = it.runes[s], want = socks[s].el;
         inner = r ? `<span class="sock full el-${r.el} ${r.el === want ? '' : 'mismatch'}">${EL[r.el].icon}<sub>${R[r.rank]}</sub></span>`
           : `<span class="sock el-${want}" title="wants ${EL[want].name}">${EL[want].icon}</span>`;
       }
-      if (ci === 0) inner += `<span class="cname">${esc(def.name.split(' ').pop())}${it.lvl > 1 ? ' +' + (it.lvl - 1) : ''}</span><span class="cpow">${fmt1(10 * (stats.power[it.id] || 0))}</span>`;
+      if (ci === 0) inner += `<span class="cname" style="color:${RAR[it.rarity || 'common'].color}">${esc(def.name.split(' ').pop())}${it.lvl > 1 ? ' +' + (it.lvl - 1) : ''}</span><span class="cpow">${fmt1(10 * (stats.power[it.id] || 0))}</span>`;
     }
     if (ghost.has(`${x},${y}`)) cls.push(ghostOk ? 'ghost-ok' : 'ghost-bad');
-    if (held?.kind === 'rune' && info && COMP[info.it.type].sockets.some((sk) => sk.c === info.ci)) cls.push('droppable');
+    if (held?.kind === 'rune' && info && Engine.socketsOf(info.it).some((sk) => sk.c === info.ci)) cls.push('droppable');
     html += `<div class="${cls.join(' ')}" style="${style}" data-x="${x}" data-y="${y}">${inner}</div>`;
   }
   $('machineGrid').style.gridTemplateColumns = `repeat(${m.w}, 52px)`;
@@ -389,10 +395,11 @@ function renderMachine() {
 
   // inspecting an installed component
   const f = focusId && m.items.find((it) => it.id === focusId);
-  setHTML($('focus'), f && !locked ? `<div class="focusbox"><b>${compTitle(f)}</b> <span class="dim">· power ${fmt1(10 * (stats.power[f.id] || 0))}</span><br>
-    <small>${esc(COMP[f.type].desc)}</small><div class="row">
-    ${COMP[f.type].sockets.map((sk, s) => f.runes[s] ? `<button class="small ghost" data-unsocket="${s}">Remove ${EL[f.runes[s].el].icon} ${R[f.runes[s].rank]}</button>` : `<span class="dim small">empty ${EL[sk.el].icon} socket</span>`).join(' ')}
-    </div><div class="row">${f.lvl < Engine.MAX_LEVEL ? `<button class="small" data-act="upgrade" ${S.dust < Engine.upgradeCost(f) ? 'disabled' : ''}>⬆ Upgrade to +${f.lvl} (${fmt(Engine.upgradeCost(f))} ✧)</button>` : '<span class="dim small">Max level</span>'}
+  setHTML($('focus'), f && !locked ? `<div class="focusbox" style="border-color:${RAR[f.rarity || 'common'].color}"><b>${compTitle(f)}</b>
+    <span class="dim">· ${RAR[f.rarity || 'common'].name} · power ${fmt1(10 * (stats.power[f.id] || 0))}</span><br>
+    <small>${esc(COMP[f.type].desc)}</small>${f.mods?.length ? `<ul class="mods">${modList(f)}</ul>` : ''}<div class="row">
+    ${Engine.socketsOf(f).map((sk, s) => f.runes[s] ? `<button class="small ghost" data-unsocket="${s}">Remove ${EL[f.runes[s].el].icon} ${R[f.runes[s].rank]}</button>` : `<span class="dim small">empty ${EL[sk.el].icon} socket</span>`).join(' ')}
+    </div><div class="row">${f.lvl < Engine.MAX_LEVEL ? `<button class="small" data-act="upgrade" ${canAfford(Engine.upgradeCost(f)) ? '' : 'disabled'}>⬆ Upgrade to +${f.lvl} (${costLabel(Engine.upgradeCost(f))})</button>` : '<span class="dim small">Max level</span>'}
     <button class="small" data-act="move">Move</button><button class="small" data-act="rot">Rotate</button>
     <button class="small" data-act="store">Put in storage</button><button class="small ghost" data-act="close">✕</button></div></div>` : '');
 
@@ -402,15 +409,14 @@ function renderMachine() {
         : 'Click a rune or a stored component to pick it up. Click a component in the machine to inspect it.');
 
   // storage
-  const groups = {};
-  for (const it of Y.storage) { const k = `${it.type}:${it.lvl}`; groups[k] = (groups[k] || 0) + 1; }
-  setHTML($('storage'), (Y.storage.length ? Y.storage.map((it) => `<div class="card ${held?.kind === 'comp' && held.id === it.id ? 'sel' : ''}" data-item="${it.id}">
-      ${miniShape(it.type, held?.id === it.id ? held.rot : 0)}<div><b>${compTitle(it)}</b><small>${esc(COMP[it.type].desc)}</small>
-      <small>Sockets: ${COMP[it.type].sockets.map((sk) => EL[sk.el].icon).join(' ')}</small></div>
-      ${it.lvl < Engine.MAX_LEVEL ? `<button class="small ghost" data-upgrade="${it.id}" ${S.dust < Engine.upgradeCost(it) ? 'disabled' : ''}>⬆ ${fmt(Engine.upgradeCost(it))} ✧</button>` : ''}</div>`).join('')
-    : '<span class="dim">Empty. Components drop in the Rift (bosses always drop one).</span>') +
-    `<div class="row"><button class="small" data-crate="1" ${S.dust < Y.crateCost ? 'disabled' : ''}>📦 Buy a component crate (${fmt(Y.crateCost)} ✧)</button>${Object.entries(groups).filter(([k, n]) => n >= 3 && +k.split(':')[1] < Engine.MAX_LEVEL)
-      .map(([k]) => `<button class="small" data-fuse="${k}">Forge 3× ${COMP[k.split(':')[0]].name} → +${k.split(':')[1]}</button>`).join('')}</div>`);
+  setHTML($('storage'), `<div class="dim small">Essence: <b class="gold">${fmt(Y.essence || 0)} ✦</b> (salvage spare runes and components to get more)</div>` +
+    (Y.storage.length ? Y.storage.map((it) => `<div class="card ${held?.kind === 'comp' && held.id === it.id ? 'sel' : ''}" data-item="${it.id}" style="border-color:${RAR[it.rarity || 'common'].color}55">
+      ${miniShape(it.type, held?.id === it.id ? held.rot : 0, it)}<div style="flex:1"><b>${compTitle(it)}</b> <span class="dim small">${RAR[it.rarity || 'common'].name}</span>
+      <small>${esc(COMP[it.type].desc)} Sockets: ${Engine.socketsOf(it).map((sk) => `<span class="elc el-${sk.el}">${EL[sk.el].icon}</span>`).join(' ')}</small>
+      ${it.mods?.length ? `<ul class="mods">${modList(it)}</ul>` : ''}</div>
+      <div class="cardbtns">${it.lvl < Engine.MAX_LEVEL ? `<button class="small ghost" data-upgrade="${it.id}" ${canAfford(Engine.upgradeCost(it)) ? '' : 'disabled'}>⬆ ${costLabel(Engine.upgradeCost(it))}</button>` : ''}
+      <button class="small ghost" data-salvage="${it.id}">♻ +${Engine.itemEssence(it)} ✦</button></div></div>`).join('')
+    : '<span class="dim">Empty. Components drop in the Rift (bosses always drop one), each with random rarity, sockets and modifiers.</span>'));
 
   // runes
   setHTML($('pouch'), Y.pouch.length ? [...Y.pouch].sort((a, b) => a.el.localeCompare(b.el) || b.rank - a.rank)
@@ -421,8 +427,11 @@ function renderMachine() {
     .map(([k]) => { const [el, rank] = k.split(':'); return `<button data-fuse="${k}" class="small">Fuse 3× ${EL[el].icon} ${R[rank]} → ${R[+rank + 1]}</button>`; });
   const others = S.players.filter((p) => p.ref !== Y.ref);
   const canGive = held && others.length && (held.kind === 'rune' || Y.storage.some((it) => it.id === held.id));
-  setHTML($('pouchActions'), `<div class="row">${fuses.join('')}</div>
+  const spareI = Y.pouch.filter((r) => r.rank === 1 && r.el !== Y.el);
+  const heldRune = held?.kind === 'rune' && Y.pouch.find((r) => r.id === held.id);
+  setHTML($('pouchActions'), `<div class="row">${fuses.join('')}${spareI.length ? `<button class="small ghost" data-act="salvageI">♻ Salvage ${spareI.length} off-element rank I (+${spareI.length} ✦)</button>` : ''}</div>
     ${held ? `<div class="row">${held.kind === 'comp' ? '<button class="small" data-act="rotate">Rotate (R)</button>' : ''}<button class="small ghost" data-act="drop">Put it down (Esc)</button>
+      ${heldRune ? `<button class="small ghost" data-act="salvageRune">♻ Salvage (+${Engine.runeEssence(heldRune)} ✦)</button>` : ''}
       ${canGive ? `<span class="dim">Give it to:</span> ${others.map((p) => `<button data-give="${p.ref}" class="small ghost">${p.el ? EL[p.el].icon + ' ' : ''}${esc(p.name)}</button>`).join('')}` : ''}</div>` : ''}`);
 
   setHTML($('compList'), Engine.COMPONENT_KEYS.map((k) => `<div class="row">${miniShape(k)} <span><b>${COMP[k].name}</b>: ${esc(COMP[k].desc)}</span></div>`).join(''));
