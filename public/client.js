@@ -223,7 +223,16 @@ function spawnLoop() {
   if (targets.filter((t) => !t.link).length < arenaCfg.max) spawnTarget();
   spawnTimer = setTimeout(spawnLoop, arenaCfg.spawnMs * (0.7 + Math.random() * 0.6));
 }
+// Block targets: a red shield appears on the screen of whoever the enemy is about to hit. Click it in time.
+const seenBlocks = new Set();
+function syncBlocks() {
+  const inc = arenaMode === 'fight' && S.dive?.incoming;
+  if (!inc || inc.ttl > inc.window || seenBlocks.has(inc.id)) return;
+  seenBlocks.add(inc.id);
+  spawnTarget({ block: inc });
+}
 function syncLinks() {
+  syncBlocks();
   if (arenaMode !== 'fight' || !S.dive) return;
   for (const l of S.dive.links) { if (!seenLinks.has(l.id)) { seenLinks.add(l.id); spawnTarget({ link: l }); } }
   for (const res of S.dive.linkResults) {
@@ -235,23 +244,25 @@ function syncLinks() {
   }
 }
 function spawnTarget(opts = {}) {
-  const link = opts.link;
-  const r = Math.round(arenaCfg.radius * (link ? 1.25 : 1)), w = arena.clientWidth, h = arena.clientHeight;
+  const link = opts.link, block = opts.block;
+  const r = Math.round(arenaCfg.radius * (link ? 1.25 : block ? 1.4 : 1)), w = arena.clientWidth, h = arena.clientHeight;
   if (w < 4 * r || h < 4 * r) return;
   let x, y, tries = 0;
   do { x = r + Math.random() * (w - 2 * r); y = r + Math.random() * (h - 2 * r); }
   while (tries++ < 12 && targets.some((t) => Math.hypot(t.x - x, t.y - y) < t.r + r + 6));
-  const life = link ? link.ttl : arenaCfg.lifeMs;
+  const life = link ? link.ttl : block ? block.ttl : arenaCfg.lifeMs;
   const el = document.createElement('div');
-  el.className = 'target' + (link ? ' linked' : '');
+  el.className = 'target' + (link ? ' linked' : block ? ' block' : '');
   el.style.cssText = `left:${x - r}px;top:${y - r}px;width:${2 * r}px;height:${2 * r}px;--life:${life}ms` + (link ? `;--hue:${link.hue}` : '');
   if (link) el.innerHTML = `<span>⚡ ${esc(link.partner)}</span>`;
+  if (block) el.innerHTML = `<em>🛡</em><span>BLOCK! (${block.atk} dmg)</span>`;
   arena.appendChild(el);
-  const t = { x, y, r, el, link };
+  const t = { x, y, r, el, link, block };
   t.timer = setTimeout(() => {
     targets = targets.filter((o) => o !== t);
     el.classList.add('expired'); setTimeout(() => el.remove(), 250);
-    if (!link && combo) { combo = 0; showCombo('lost'); }
+    if (block) { arena.classList.remove('hurt'); void arena.offsetWidth; arena.classList.add('hurt'); }
+    if (!link && !block && combo) { combo = 0; showCombo('lost'); }
   }, life);
   targets.push(t);
 }
@@ -273,6 +284,7 @@ arena.addEventListener('pointerdown', (e) => {
   best.el.classList.add('popped'); setTimeout(() => best.el.remove(), 200);
   const acc = 1 - bestD / best.r;
   if (best.link) { send({ type: 'linkHit', id: best.link.id, acc }); pop(e, `⚡ now ${best.link.partner}!`, 'linked'); return; }
+  if (best.block) { send({ type: 'block', id: best.block.id, acc }); pop(e, acc >= 0.85 ? 'PERFECT BLOCK! ⚔' : 'BLOCKED!', acc >= 0.85 ? 'crit' : 'linked'); return; }
   send({ type: 'hit', acc, combo });
   combo++; showCombo();
   pop(e, acc >= 0.85 ? 'OVERCHARGE!' : '+charge', acc >= 0.85 ? 'crit' : 'hit');
@@ -439,7 +451,9 @@ function renderRift() {
         : '<div class="enemy"><div class="name" style="color:#7ee787">Descending…</div><div class="bar"><div></div></div><div>&nbsp;</div></div>'}
       ${units(D)}`);
     setArena('fight', '', D.arena);
-    bottom(`<p class="hint">Your machine fights on its own. Click targets to <b>overcharge</b> it (dead centre charges most), and hit <b>⚡ linked targets</b> together with a crewmate for a burst.
+    syncBlocks();
+    bottom(`<p class="hint">Your machine fights on its own. Click targets to <b>overcharge</b> it (dead centre and long combos charge most).
+      When a red <b>🛡 shield</b> appears, the enemy is about to hit you: click it to <b>block</b> (dead centre hits back). Hit <b>⚡ linked targets</b> together with a crewmate for a burst.
       It comes home by itself at ${Math.round(Y.recallPct * 100)}% HP.</p><div class="row"><button data-act="recall">🏳 Recall now</button></div>`);
     return;
   }

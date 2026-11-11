@@ -38,10 +38,13 @@ const OWN_ELEMENT_CHANCE = 0.7;
 const MAX_W = 7, MAX_H = 6;
 const TIER_HP = 2.6, TIER_ATK = 1.75; // how much tougher each Rift Tier is
 const FORMATION = 0.15;
+const BLOCK_WINDOW_MS = 1500; // the shield target shows up this long before an enemy attack lands
+const MAX_CHARGE = 5;
 const VERSION = 5;
 
-// Resonance a machine needs to unlock each Rift Tier: 30, 75, 135, 210, 300, 405, 525, 660, 810 …
-const tierReq = (t) => (t <= 1 ? 0 : Math.round(15 * (t - 1) * (t + 2) / 2));
+// Resonance a machine needs to unlock each Rift Tier: 30, 66, 145, 320, 700, 1.5K, 3.4K, 7.5K …
+// (×2.2 per tier, because machine power grows multiplicatively: each rune rank doubles a socket, each level adds 50%)
+const tierReq = (t) => (t <= 1 ? 0 : Math.round(30 * Math.pow(2.2, t - 2)));
 const tierFor = (res) => { let t = 1; while (res >= tierReq(t + 1)) t++; return t; };
 const crateCost = (p) => Math.ceil(5000 * Math.pow(1.6, p.crates || 0));
 
@@ -172,9 +175,19 @@ function spawnEnemy(dive, t) {
   dive.enemy = {
     name: boss ? pick(BOSSES) : pick(ENEMIES), boss, hp: maxHp, maxHp,
     atk: Math.round(5 * Math.pow(1.15, f - 1) * Math.pow(TIER_ATK, tier - 1) * (boss ? 1.5 : 1)),
-    nextAttackAt: t + ENEMY_ATTACK_MS,
+    nextAttackAt: t + ENEMY_ATTACK_MS, attackId: 0, target: null, blocked: null,
   };
+  aimAttack(dive);
   dive.links = [];
+}
+
+// Each attack is aimed at a machine in advance, so its owner gets a chance to block it.
+function aimAttack(dive) {
+  const e = dive.enemy, targets = fighting(dive);
+  dive.attackSeq = (dive.attackSeq || 0) + 1;
+  e.attackId = dive.attackSeq;
+  e.target = targets.length ? pick(targets)[0] : null;
+  e.blocked = null;
 }
 
 function dropRune(room, pid, tier, boss) {
@@ -234,7 +247,7 @@ function simulateDive(room, now, online) {
     if (t - dive.startedAt > MAX_DIVE_MS) { for (const [pid] of fighting(dive)) leaveDive(room, dive, pid, false, t); return; }
     for (const [, u] of fighting(dive)) {
       u.hp = Math.min(u.stats.hp, u.hp + u.stats.regen * sec);
-      u.charge *= Math.pow(0.8, sec); // overcharge fades
+      u.charge *= Math.pow(0.85, sec); // overcharge fades
     }
     for (const l of [...dive.links]) if (t > l.expiresAt + LINK_WINDOW_MS) resolveLink(room, dive, l, false, t);
     if (dive.pauseUntil > t) continue;
@@ -249,9 +262,11 @@ function simulateDive(room, now, online) {
     }
     while (t >= e.nextAttackAt && room.dive) {
       e.nextAttackAt += ENEMY_ATTACK_MS;
-      const targets = fighting(dive);
-      if (!targets.length) break;
-      const [pid, u] = pick(targets);
+      let pid = e.target;
+      if (!pid || dive.units[pid]?.status !== 'fighting') { const targets = fighting(dive); if (!targets.length) break; pid = pick(targets)[0]; }
+      const u = dive.units[pid], blocked = e.blocked;
+      aimAttack(dive);
+      if (blocked) continue; // the owner clicked the shield in time
       u.hp -= Math.max(1, e.atk - u.stats.armor);
       if (u.hp <= 0) leaveDive(room, dive, pid, true, t);
       else if (u.hp / u.stats.hp <= room.players[pid].recallPct) leaveDive(room, dive, pid, false, t);
@@ -465,7 +480,19 @@ function act(room, pid, msg, online, now = Date.now()) {
       me.lastHit = now; me.lastClick = now;
       const acc = Math.max(0, Math.min(1, Number(msg.acc) || 0)), combo = Math.max(0, Math.min(100, msg.combo | 0));
       const u = room.dive.units[pid];
-      u.charge = Math.min(3, u.charge + (acc >= 0.85 ? 0.15 : 0.05 + 0.08 * acc) * (1 + 0.03 * Math.min(combo, 30)));
+      u.charge = Math.min(MAX_CHARGE, u.charge + (acc >= 0.85 ? 0.2 : 0.06 + 0.1 * acc) * (1 + 0.04 * Math.min(combo, 40)));
+      return null;
+    }
+    case 'block': { // clicking the shield target before an enemy attack lands stops it; a perfect block hits back
+      const e = room.dive?.enemy;
+      if (!diving || !e || e.attackId !== msg.id || e.target !== pid || e.blocked) return null;
+      if (now < e.nextAttackAt - BLOCK_WINDOW_MS - 300) return null;
+      const acc = Math.max(0, Math.min(1, Number(msg.acc) || 0));
+      e.blocked = { perfect: acc >= 0.85 };
+      me.lastClick = now;
+      const u = room.dive.units[pid];
+      if (acc >= 0.85) { e.hp -= 3 * u.stats.dmg * (1 + u.charge); if (e.hp <= 0) killEnemy(room, room.dive, now); }
+      me.blocks = (me.blocks || 0) + 1;
       return null;
     }
     case 'linkHit': {
@@ -520,6 +547,8 @@ function view(room, pid, online, now = Date.now()) {
       units: Object.entries(dive.units).map(([id, u]) => ({ name: nameOf(id), el: room.players[id]?.el, me: id === pid, status: u.status,
         hp: Math.max(0, u.hp), maxHp: u.stats.hp, dmg: u.stats.dmg, charge: u.charge, runes: u.loot.runes.length, comps: u.loot.comps.length })),
       arena: myUnit?.status === 'fighting' ? { radius: Math.round(Math.max(18, 34 - dive.tier)), lifeMs: 1300, spawnMs: 650, max: 2 } : null,
+      incoming: myUnit?.status === 'fighting' && dive.enemy && dive.enemy.target === pid && !dive.enemy.blocked
+        ? { id: dive.enemy.attackId, ttl: Math.max(0, dive.enemy.nextAttackAt - now), atk: dive.enemy.atk, window: BLOCK_WINDOW_MS } : null,
       links: dive.links.filter((l) => (l.a === pid || l.b === pid) && !l.hits[pid])
         .map((l) => ({ id: l.id, partner: nameOf(l.a === pid ? l.b : l.a), hue: l.hue, ttl: Math.max(0, l.expiresAt - now) })),
       linkResults: dive.linkResults.filter((r) => r.a === pid || r.b === pid).map((r) => ({ id: r.id, ok: r.ok, partner: nameOf(r.a === pid ? r.b : r.a) })),

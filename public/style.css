@@ -160,3 +160,12 @@ button.small { padding:.25em .55em; font-size:12px; }
 .unit.destroyed { opacity:.5; } .unit.recalled { opacity:.7; }
 #recallSel { background:#0f1426; color:var(--ink); border:1px solid var(--line); border-radius:6px; padding:.2em; }
 .formation { font-size:13px; color:#7ee787; border:1px solid #7ee787; border-radius:6px; padding:0 .4em; margin-left:.4em; }
+
+/* block targets */
+.target.block { background: radial-gradient(circle, #fff 0 10%, #ff6b6b 10% 22%, #5a1620 22% 100%);
+  box-shadow: 0 0 20px #ff4d4d, 0 0 4px #fff; animation: tgrow .12s ease-out, lpulse .3s ease-in-out infinite alternate; }
+.target.block::after { border-color:#ff6b6b; }
+.target.block em { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-style:normal; font-size:20px; }
+.target.block span { position:absolute; top:100%; left:50%; transform:translateX(-50%); white-space:nowrap; font-size:12px; font-weight:bold; color:#ff8a8a; margin-top:4px; }
+#arena.hurt { animation: hurt .35s; }
+@keyframes hurt { 30% { box-shadow: inset 0 0 40px rgba(255,60,60,.7); } }

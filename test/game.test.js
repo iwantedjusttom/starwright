@@ -176,8 +176,8 @@ test('worlds from older versions keep stardust, buildings, players, elements and
   assert.strictEqual(g.normalize(r), r);
 });
 
-test('tier curve: 30, 75, 135, 210, …; worlds from the Star Engine era get their tier re-measured', () => {
-  assert.deepStrictEqual([2, 3, 4, 5, 8].map(g.tierReq), [30, 75, 135, 210, 525]);
+test('tier curve: 30, 66, 145, 319, … (×2.2); worlds from the Star Engine era get their tier re-measured', () => {
+  assert.deepStrictEqual([2, 3, 4, 5, 8].map(g.tierReq), [30, 66, 145, 319, 3401]);
   assert.strictEqual(g.tierFor(105), 3);
   const r = setup(); const m = armed(r, 'a');
   r.version = 4; r.maxTier = 7; // a v4 save carried over an old-scale tier
@@ -230,4 +230,28 @@ test('formation: machines diving together hit harder than the same machines alon
   const one = dmgIn(1), three = dmgIn(3);
   assert.ok(Math.abs(three.perMachine / one.perMachine - 1.3) < 1e-6);
   assert.strictEqual(three.view, 1.3);
+});
+
+test('blocking: the targeted player can stop an incoming attack; a perfect block hits back', () => {
+  const r = setup(); r.dust = 1e9;
+  armed(r, 'a');
+  g.act(r, 'a', { type: 'dive' }, solo, 0);
+  g.tick(r, 1500, solo); // enemy spawns and aims at Ann
+  const e = r.dive.enemy;
+  e.hp = e.maxHp = 1e6;
+  const inc = g.view(r, 'a', solo, 1500).dive.incoming;
+  assert.ok(inc && inc.id === e.attackId);
+  assert.strictEqual(g.act(r, 'a', { type: 'block', id: inc.id, acc: 0.95 }, solo, e.nextAttackAt - 1000), null);
+  assert.ok(e.hp < 1e6, 'a perfect block hits back');
+  const hp = r.dive.units.a.hp;
+  g.tick(r, e.nextAttackAt + 10, solo);
+  assert.strictEqual(r.dive.units.a.hp >= hp, true, 'the blocked attack did no damage');
+  // the next attack lands if nobody blocks it
+  const hp2 = r.dive.units.a.hp;
+  g.tick(r, r.dive.enemy.nextAttackAt + 10, solo);
+  assert.ok(r.dive.units.a.hp < hp2 + r.dive.units.a.stats.regen * 7);
+  // too early doesn't count
+  const inc2 = g.view(r, 'a', solo, 0).dive.incoming;
+  g.act(r, 'a', { type: 'block', id: inc2.id, acc: 1 }, solo, r.dive.enemy.nextAttackAt - 5000);
+  assert.strictEqual(r.dive.enemy.blocked, null);
 });
