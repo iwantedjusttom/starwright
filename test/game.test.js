@@ -166,11 +166,40 @@ test('worlds from older versions keep stardust, buildings, players, elements and
     engine: { size: 3, grid: [{ id: 7, el: 'sun', rank: 2 }, null] },
     players: { a: { name: 'Ann', el: 'moon', pouch: [{ id: 8, el: 'moon', rank: 1 }] }, b: { name: 'Bo', el: null, pouch: [] } }, feed: [], bestFloor: 6 };
   const r = g.normalize(old);
-  assert.strictEqual(r.version, 4);
-  assert.strictEqual(r.dust, 5000); assert.strictEqual(r.maxTier, 2);
+  assert.strictEqual(r.version, 5);
+  assert.strictEqual(r.dust, 5000);
+  assert.strictEqual(r.maxTier, 1, 'tiers are re-measured from actual machines (starters have no runes socketed)');
   assert.strictEqual(r.players.a.el, 'moon');
   assert.ok(r.players.a.machine && r.players.a.machine.items.length === 4);
   assert.strictEqual(r.players.b.machine, null);
   assert.strictEqual(r.players.a.pouch.length + r.players.b.pouch.length, 2);
   assert.strictEqual(g.normalize(r), r);
+});
+
+test('tier curve: 30, 75, 135, 210, …; worlds from the Star Engine era get their tier re-measured', () => {
+  assert.deepStrictEqual([2, 3, 4, 5, 8].map(g.tierReq), [30, 75, 135, 210, 525]);
+  assert.strictEqual(g.tierFor(105), 3);
+  const r = setup(); const m = armed(r, 'a');
+  r.version = 4; r.maxTier = 7; // a v4 save carried over an old-scale tier
+  const res = g.machineStats(r.players.a).resonance;
+  g.normalize(r);
+  assert.strictEqual(r.version, 5);
+  assert.strictEqual(r.maxTier, g.tierFor(res));
+  assert.match(r.feed.at(-1).text, /re-measured/);
+});
+
+test('stardust upgrades components and buys component crates', () => {
+  const r = setup(); const m = armed(r, 'a');
+  const lance = m.items.find((it) => it.type === 'lance');
+  const dmg = g.machineStats(r.players.a).dmg;
+  assert.match(g.act(r, 'a', { type: 'upgrade', itemId: lance.id }, solo, 0), /3,000 stardust/);
+  r.dust = 1e7;
+  g.act(r, 'a', { type: 'upgrade', itemId: lance.id }, solo, 0);
+  assert.strictEqual(lance.lvl, 2);
+  assert.strictEqual(r.dust, 1e7 - 3000);
+  assert.ok(Math.abs(g.machineStats(r.players.a).dmg - (dmg + 3)) < 1e-9); // the Lance goes from 6 to 9 damage/s
+  g.act(r, 'a', { type: 'crate' }, solo, 0);
+  g.act(r, 'a', { type: 'crate' }, solo, 0);
+  assert.strictEqual(r.players.a.storage.length, 2);
+  assert.strictEqual(r.dust, 1e7 - 3000 - 5000 - 8000);
 });

@@ -117,7 +117,10 @@
     return s;
   }
 
-  const api = { ELEMENTS, ELEMENT_KEYS, ROMAN, MAX_RANK, MAX_LEVEL, MISMATCH, runePower, COMPONENTS, COMPONENT_KEYS,
+  // Stardust price to raise a component one level (bigger shapes and higher levels cost more).
+  const upgradeCost = (it) => Math.ceil(1000 * COMPONENTS[it.type].cells.length * Math.pow(6, it.lvl - 1));
+
+  const api = { upgradeCost, ELEMENTS, ELEMENT_KEYS, ROMAN, MAX_RANK, MAX_LEVEL, MISMATCH, runePower, COMPONENTS, COMPONENT_KEYS,
     cellsFor, occupancy, fits, charge, stats, levelFactor };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.Engine = api;
 })(this);

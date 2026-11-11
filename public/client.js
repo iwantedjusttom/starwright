@@ -144,6 +144,8 @@ $('pouch').onclick = (e) => {
 $('storage').onclick = (e) => {
   const b = e.target.closest('button');
   if (b?.dataset.fuse) { const [type, lvl] = b.dataset.fuse.split(':'); send({ type: 'fuseComps', compType: type, lvl: +lvl }); return; }
+  if (b?.dataset.upgrade) { send({ type: 'upgrade', itemId: +b.dataset.upgrade }); return; }
+  if (b?.dataset.crate) { send({ type: 'crate' }); return; }
   const id = +e.target.closest('[data-item]')?.dataset.item; if (!id) return;
   held = held?.kind === 'comp' && held.id === id ? null : { kind: 'comp', id, rot: 0 }; focusId = null; render();
 };
@@ -159,6 +161,7 @@ $('focus').onclick = (e) => {
   const b = e.target.closest('button'); if (!b) return;
   const it = findItem(focusId); if (!it) return;
   if (b.dataset.act === 'store') { send({ type: 'store', itemId: it.id }); focusId = null; }
+  if (b.dataset.act === 'upgrade') send({ type: 'upgrade', itemId: it.id });
   if (b.dataset.act === 'move') { held = { kind: 'comp', id: it.id, rot: it.rot }; focusId = null; render(); }
   if (b.dataset.act === 'rot') send({ type: 'place', itemId: it.id, x: it.x, y: it.y, rot: it.rot + 1 });
   if (b.dataset.unsocket) send({ type: 'unsocket', itemId: it.id, s: +b.dataset.unsocket });
@@ -370,14 +373,15 @@ function renderMachine() {
     ${statLine('Armor', stats.armor, after?.armor)}${statLine('Repair/s', stats.regen, after?.regen)}
     ${statLine('Extra runes', stats.loot * 100, after && after.loot * 100, (v) => Math.round(v) + '%')}
     ${statLine('Resonance', stats.resonance, after?.resonance, fmt)}
-    <div class="dim tiny">Tier ${S.tiers.max + 1} unlocks at ${fmt(S.tiers.nextReq)}</div></div>`);
+    <div class="dim tiny">Tier ${S.tiers.max + 1} unlocks at ${fmt(S.tiers.nextReq)} (${fmt(Math.max(0, S.tiers.nextReq - stats.resonance))} to go)</div></div>`);
 
   // inspecting an installed component
   const f = focusId && m.items.find((it) => it.id === focusId);
   setHTML($('focus'), f && !locked ? `<div class="focusbox"><b>${compTitle(f)}</b> <span class="dim">· power ${fmt1(10 * (stats.power[f.id] || 0))}</span><br>
     <small>${esc(COMP[f.type].desc)}</small><div class="row">
     ${COMP[f.type].sockets.map((sk, s) => f.runes[s] ? `<button class="small ghost" data-unsocket="${s}">Remove ${EL[f.runes[s].el].icon} ${R[f.runes[s].rank]}</button>` : `<span class="dim small">empty ${EL[sk.el].icon} socket</span>`).join(' ')}
-    </div><div class="row"><button class="small" data-act="move">Move</button><button class="small" data-act="rot">Rotate</button>
+    </div><div class="row">${f.lvl < Engine.MAX_LEVEL ? `<button class="small" data-act="upgrade" ${S.dust < Engine.upgradeCost(f) ? 'disabled' : ''}>⬆ Upgrade to +${f.lvl} (${fmt(Engine.upgradeCost(f))} ✧)</button>` : '<span class="dim small">Max level</span>'}
+    <button class="small" data-act="move">Move</button><button class="small" data-act="rot">Rotate</button>
     <button class="small" data-act="store">Put in storage</button><button class="small ghost" data-act="close">✕</button></div></div>` : '');
 
   setHTML($('helpline'), locked ? '🔒 Your machine is in the Rift. Recall it to make changes.'
@@ -390,9 +394,10 @@ function renderMachine() {
   for (const it of Y.storage) { const k = `${it.type}:${it.lvl}`; groups[k] = (groups[k] || 0) + 1; }
   setHTML($('storage'), (Y.storage.length ? Y.storage.map((it) => `<div class="card ${held?.kind === 'comp' && held.id === it.id ? 'sel' : ''}" data-item="${it.id}">
       ${miniShape(it.type, held?.id === it.id ? held.rot : 0)}<div><b>${compTitle(it)}</b><small>${esc(COMP[it.type].desc)}</small>
-      <small>Sockets: ${COMP[it.type].sockets.map((sk) => EL[sk.el].icon).join(' ')}</small></div></div>`).join('')
+      <small>Sockets: ${COMP[it.type].sockets.map((sk) => EL[sk.el].icon).join(' ')}</small></div>
+      ${it.lvl < Engine.MAX_LEVEL ? `<button class="small ghost" data-upgrade="${it.id}" ${S.dust < Engine.upgradeCost(it) ? 'disabled' : ''}>⬆ ${fmt(Engine.upgradeCost(it))} ✧</button>` : ''}</div>`).join('')
     : '<span class="dim">Empty. Components drop in the Rift (bosses always drop one).</span>') +
-    `<div class="row">${Object.entries(groups).filter(([k, n]) => n >= 3 && +k.split(':')[1] < Engine.MAX_LEVEL)
+    `<div class="row"><button class="small" data-crate="1" ${S.dust < Y.crateCost ? 'disabled' : ''}>📦 Buy a component crate (${fmt(Y.crateCost)} ✧)</button>${Object.entries(groups).filter(([k, n]) => n >= 3 && +k.split(':')[1] < Engine.MAX_LEVEL)
       .map(([k]) => `<button class="small" data-fuse="${k}">Forge 3× ${COMP[k.split(':')[0]].name} → +${k.split(':')[1]}</button>`).join('')}</div>`);
 
   // runes
@@ -450,7 +455,9 @@ function renderRift() {
       Every kill drops runes (mostly your element) and sometimes components; bosses always drop a component.
       If it's destroyed, it keeps only half of what it found and each installed part has a 30% chance to be lost.</p>
       <div class="row tiers">${Array.from({ length: t }, (_, i) => `<button data-act="tier" data-tier="${i + 1}" class="small ${i + 1 === selectedTier ? 'on-tier' : 'ghost'}">Tier ${i + 1}</button>`).join('')}
-        <span class="dim">Tier ${t + 1} unlocks when a machine reaches Resonance ${fmt(S.tiers.nextReq)}</span></div>`}
+        </div>
+      <p class="dim small">Tiers unlock when any crew machine reaches: ${S.tiers.ladder.map((l) => `Tier ${l.tier} at <b>${fmt(l.req)}</b>`).join(' · ')}.
+        Your machine: <b class="gold">${fmt(Y.machine ? Engine.stats(Y.machine).resonance : 0)}</b>. Higher tiers: tougher enemies, better runes and components.</p>`}
     <div class="row"><label class="dim">Come home at <select id="recallSel" data-value="${Y.recallPct}">${[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7].map((v) => `<option value="${v}" ${Math.abs(v - Y.recallPct) < 0.01 ? 'selected' : ''}>${Math.round(v * 100)}% HP</option>`).join('')}</select></label></div>
     <button class="big" data-act="dive" ${!Y.machine || S.dust < cost ? 'disabled' : ''}>${D ? `Join the Tier ${D.tier} dive` : `Send your machine into Tier ${tier}`} (${fmt(cost)} ✧)</button>`);
   bottom('');

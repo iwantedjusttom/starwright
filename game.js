@@ -36,9 +36,12 @@ const LINK_WINDOW_MS = 600;
 const LOSE_ITEM_CHANCE = 0.3; // when a machine is destroyed, each installed component (and each rune) may be lost
 const OWN_ELEMENT_CHANCE = 0.7;
 const MAX_W = 7, MAX_H = 6;
-const VERSION = 4;
+const VERSION = 5;
 
-const tierReq = (t) => (t <= 1 ? 0 : Math.round(80 * Math.pow(1.65, t - 2)));
+// Resonance a machine needs to unlock each Rift Tier: 30, 75, 135, 210, 300, 405, 525, 660, 810 …
+const tierReq = (t) => (t <= 1 ? 0 : Math.round(15 * (t - 1) * (t + 2) / 2));
+const tierFor = (res) => { let t = 1; while (res >= tierReq(t + 1)) t++; return t; };
+const crateCost = (p) => Math.ceil(5000 * Math.pow(1.6, p.crates || 0));
 
 // ---------------------------------------------------------------- helpers
 const shuffle = (a) => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
@@ -62,7 +65,7 @@ function starterMachine(room) {
   const place = (type, x, y, rot = 0) => Object.assign(newItem(room, type), { x, y, rot });
   return { w: 4, h: 3, items: [place('lance', 0, 0), place('coil', 3, 0), place('shield', 0, 1), place('pump', 2, 1)] };
 }
-const newPlayer = (name, now) => ({ name, el: null, pouch: [], storage: [], machine: null, recallPct: 0.3,
+const newPlayer = (name, now) => ({ name, el: null, pouch: [], storage: [], machine: null, recallPct: 0.3, crates: 0,
   contributed: 0, clicks: 0, lastClick: 0, lastSeen: now, lastDive: null });
 
 // ---------------------------------------------------------------- room
@@ -82,6 +85,15 @@ function newRoom(id, now = Date.now()) {
 // Convert worlds saved by older versions: keep stardust, buildings, players, their elements and runes.
 function normalize(room) {
   if (room.version === VERSION) return room;
+  if (room.version === 4) {
+    // The tier curve changed: recompute from the machines the crew actually has.
+    room.version = VERSION;
+    const was = room.maxTier;
+    room.maxTier = tierFor(bestResonance(room));
+    for (const p of Object.values(room.players)) p.crates = p.crates || 0;
+    log(room, `🧭 Rift Tiers were re-measured for machines: your strongest machine opens up to Tier ${room.maxTier}${was !== room.maxTier ? ` (was ${was})` : ''}. Stardust can now upgrade components and buy component crates.`, room.lastTick);
+    return room;
+  }
   const fresh = newRoom(room.id, room.lastTick || Date.now());
   const oldBuildings = room.buildings || room.upgrades || {};
   for (const k of Object.keys(BUILDINGS)) fresh.buildings[k] = oldBuildings[k] || 0;
@@ -100,11 +112,13 @@ function normalize(room) {
   }
   // Runes that were in the old shared Star Engine are handed back out.
   (room.engine?.grid || []).filter(Boolean).forEach((r, i) => { if (pids.length) fresh.players[pids[i % pids.length]].pouch.push(r); });
+  fresh.maxTier = tierFor(bestResonance(fresh));
   log(fresh, '🔧 Machines have arrived! Everyone gets a starter machine: socket your runes into it and send it into the Rift. The Star Engine\'s runes were handed back out.', fresh.lastTick);
   return fresh;
 }
 
 const machineStats = (p) => (p.machine ? Engine.stats(p.machine) : { dmg: 0, hp: 0, armor: 0, regen: 0, loot: 0, resonance: 0, power: {} });
+const bestResonance = (room) => Math.max(0, ...Object.values(room.players).map((p) => machineStats(p).resonance));
 const totalResonance = (room) => Object.values(room.players).reduce((s, p) => s + machineStats(p).resonance, 0);
 const baseDps = (room) => Object.entries(BUILDINGS).reduce((s, [k, d]) => s + d.dps * room.buildings[k], 0);
 const dps = (room) => baseDps(room) * (1 + totalResonance(room) / 200); // stronger machines also boost the observatory
@@ -129,7 +143,7 @@ function ensurePlayer(room, pid, name, now = Date.now()) {
 
 // Tiers unlock permanently the first time any crew machine's Resonance reaches them.
 function checkTiers(room, now) {
-  const best = Math.max(0, ...Object.values(room.players).map((p) => machineStats(p).resonance));
+  const best = bestResonance(room);
   while (best >= tierReq(room.maxTier + 1)) {
     room.maxTier++;
     log(room, `🌀 A machine hit Resonance ${best}! Rift Tier ${room.maxTier} is open: tougher foes, better loot.`, now);
@@ -388,6 +402,27 @@ function act(room, pid, msg, online, now = Date.now()) {
       log(room, `⚙ ${me.name} forged three components into ${compName(made)}.`, now);
       return null;
     }
+    case 'upgrade': { // spend stardust to raise a component's level
+      const it = findItem(msg.itemId);
+      if (!it) return 'You don\'t have that component.';
+      if (diving && m.items.includes(it)) return 'Your machine is in the Rift. Recall it to make changes.';
+      if (it.lvl >= MAX_LEVEL) return 'That component is already at its highest level.';
+      const c = Engine.upgradeCost(it);
+      if (room.dust < c) return `Upgrading costs ${c.toLocaleString()} stardust.`;
+      room.dust -= c; it.lvl++;
+      if (m && m.items.includes(it)) changed(`upgraded ${compName(it)}`);
+      else log(room, `⚙ ${me.name} upgraded a stored ${compName(it)}.`, now);
+      return null;
+    }
+    case 'crate': { // spend stardust on a random new component
+      const c = crateCost(me);
+      if (room.dust < c) return `A component crate costs ${c.toLocaleString()} stardust.`;
+      room.dust -= c; me.crates = (me.crates || 0) + 1;
+      const it = newItem(room, pick(COMPONENT_KEYS));
+      me.storage.push(it);
+      log(room, `📦 ${me.name} opened a component crate: ${compName(it)}!`, now);
+      return null;
+    }
     case 'expand': {
       const dir = msg.dir === 'h' ? 'h' : 'w';
       if ((dir === 'w' && m.w >= MAX_W) || (dir === 'h' && m.h >= MAX_H)) return 'The machine can\'t grow any further that way.';
@@ -464,10 +499,10 @@ function view(room, pid, online, now = Date.now()) {
     }),
     cloth: { key: 'cloth', name: CLOTH.name, desc: '+1 stardust per click', count: room.cloth, cost: cost(CLOTH, room.cloth) },
     totalResonance: totalResonance(room),
-    tiers: { max: room.maxTier, nextReq: tierReq(room.maxTier + 1), costs: Array.from({ length: room.maxTier }, (_, i) => diveCost(room, i + 1)) },
+    tiers: { max: room.maxTier, nextReq: tierReq(room.maxTier + 1), ladder: Array.from({ length: 4 }, (_, i) => ({ tier: room.maxTier + 1 + i, req: tierReq(room.maxTier + 1 + i) })), costs: Array.from({ length: room.maxTier }, (_, i) => diveCost(room, i + 1)) },
     you: {
       pid, ref: refOf(pid), name: me.name, el: me.el, pouch: me.pouch, storage: me.storage, machine: me.machine,
-      recallPct: me.recallPct, expandCost: me.machine ? expandCost(me.machine) : 0, maxW: MAX_W, maxH: MAX_H,
+      recallPct: me.recallPct, expandCost: me.machine ? expandCost(me.machine) : 0, maxW: MAX_W, maxH: MAX_H, crateCost: crateCost(me),
       lastDive: me.lastDive, diving: myUnit?.status === 'fighting',
     },
     players: Object.entries(room.players).map(([id, pl]) => ({ ref: refOf(id), name: pl.name, el: pl.el, online: online.has(id),
@@ -488,4 +523,4 @@ function view(room, pid, online, now = Date.now()) {
   };
 }
 
-module.exports = { normalize, newRoom, tick, act, view, ensurePlayer, dps, tierReq, refOf, machineStats, BUILDINGS };
+module.exports = { normalize, newRoom, tick, act, view, ensurePlayer, dps, tierReq, tierFor, refOf, machineStats, BUILDINGS };
