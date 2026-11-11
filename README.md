@@ -19,6 +19,13 @@ Aether is pressed into **Aether Cells** (Rift fuel). Lenses are installed (+3% p
 
 **The Rift Gate:** the Rift must be built first, in 3 stages: 10 telescopes, a relit constellation, 5 domes, plus stardust.
 
+**Crew levels:** building, crafting, relighting constellations, clearing Rift floors and stardust milestones earn crew XP.
+Each level unlocks something (buildings, the Workshop, the Rift Gate, Lens Grinders, the Starforge, …). See the roadmap in-game.
+
+**Rift combat is skill-based:** targets pop up in an arena; hit them near the centre for more damage (bullseyes crit),
+chain hits for a combo, and don't miss or let them fade. Enemies drop **Meteor Iron**, which the **Starforge** turns
+(with Aether) into **Starsteel** for permanent Rift Gear.
+
 **How the loops feed each other:** stardust pays for Rift Runs → runs earn **Starshards** →
 shards buy permanent perks (more production, faster charting, stronger runs) → constellations multiply everything.
 

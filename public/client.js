@@ -126,19 +126,83 @@ $('workshop').addEventListener('change', (e) => {
   dragging = false;
   send({ type: 'route', key: e.target.dataset.key, value: +e.target.value });
 });
-$('rift').addEventListener('pointerdown', (e) => {
-  if (!e.target.closest('[data-act="hit"]')) return;
-  send({ type: 'hit' });
-  pop(e, '⚔', 'hit');
+function riftClick(e) {
+  const b = e.target.closest('button'); if (!b) return;
+  if (b.dataset.act === 'dismissRun') { localStorage.dismissedRun = S.lastRun.at; return render(); }
+  if (b.dataset.act === 'boon') send({ type: 'boon', key: b.dataset.key });
+  else if (b.dataset.act === 'gear') send({ type: 'gear', key: b.dataset.key });
+  else send({ type: b.dataset.act });
+}
+$('rift').onclick = riftClick;
+$('riftBottom').onclick = riftClick;
+
+// ---------------------------------------------------------------- arena (skill combat)
+// Targets are spawned locally for each player; the server is told how accurate each hit was.
+const arena = $('arena');
+let arenaMode = 'off', arenaCfg = null, targets = [], combo = 0, spawnTimer = null;
+function setArena(mode, msg, cfg) {
+  if (cfg) arenaCfg = cfg;
+  arena.classList.toggle('hidden', mode === 'off');
+  arena.classList.toggle('inert', mode === 'inert');
+  $('arenaMsg').innerHTML = msg || '';
+  if (mode === arenaMode) return;
+  arenaMode = mode;
+  clearTimeout(spawnTimer);
+  targets.forEach((t) => { clearTimeout(t.timer); t.el.remove(); });
+  targets = [];
+  combo = 0; showCombo();
+  if (mode === 'fight') spawnTimer = setTimeout(spawnLoop, 400);
+}
+function spawnLoop() {
+  if (arenaMode !== 'fight') return;
+  if (targets.length < arenaCfg.max) spawnTarget();
+  spawnTimer = setTimeout(spawnLoop, arenaCfg.spawnMs * (0.7 + Math.random() * 0.6));
+}
+function spawnTarget() {
+  const r = arenaCfg.radius, w = arena.clientWidth, h = arena.clientHeight;
+  if (w < 4 * r || h < 4 * r) return;
+  let x, y, tries = 0;
+  do { x = r + Math.random() * (w - 2 * r); y = r + Math.random() * (h - 2 * r); }
+  while (tries++ < 12 && targets.some((t) => Math.hypot(t.x - x, t.y - y) < t.r + r + 6));
+  const el = document.createElement('div');
+  el.className = 'target';
+  el.style.cssText = `left:${x - r}px;top:${y - r}px;width:${2 * r}px;height:${2 * r}px;--life:${arenaCfg.lifeMs}ms`;
+  arena.appendChild(el);
+  const t = { x, y, r, el };
+  t.timer = setTimeout(() => { // too slow: the target fades and the combo breaks
+    targets = targets.filter((o) => o !== t);
+    el.classList.add('expired'); setTimeout(() => el.remove(), 250);
+    if (combo) { combo = 0; showCombo('lost'); }
+  }, arenaCfg.lifeMs);
+  targets.push(t);
+}
+function showCombo(state) {
+  const el = $('combo');
+  el.textContent = combo > 1 ? `Combo ×${combo}` : '';
+  el.classList.toggle('lost', state === 'lost');
+}
+arena.addEventListener('pointerdown', (e) => {
+  if (arenaMode !== 'fight') return;
+  e.preventDefault();
+  const rect = arena.getBoundingClientRect();
+  const px = e.clientX - rect.left, py = e.clientY - rect.top;
+  let best = null, bestD = Infinity;
+  for (const t of targets) { const d = Math.hypot(t.x - px, t.y - py); if (d <= t.r && d < bestD) { best = t; bestD = d; } }
+  if (!best) { // clicked empty sky: a missed attack
+    pop(e, 'miss', 'miss');
+    if (combo) { combo = 0; showCombo('lost'); }
+    return;
+  }
+  clearTimeout(best.timer);
+  targets = targets.filter((t) => t !== best);
+  best.el.classList.add('popped'); setTimeout(() => best.el.remove(), 200);
+  const acc = 1 - bestD / best.r;
+  send({ type: 'hit', acc, combo });
+  combo++; showCombo();
+  pop(e, acc >= 0.85 ? 'BULLSEYE!' : acc >= 0.45 ? 'Hit' : 'Graze', acc >= 0.85 ? 'crit' : 'hit');
   const en = document.querySelector('#rift .enemy');
   if (en) { en.classList.remove('struck'); void en.offsetWidth; en.classList.add('struck'); }
 });
-$('rift').onclick = (e) => {
-  const b = e.target.closest('button'); if (!b || b.dataset.act === 'hit') return;
-  if (b.dataset.act === 'dismissRun') { localStorage.dismissedRun = S.lastRun.at; return render(); }
-  if (b.dataset.act === 'boon') send({ type: 'boon', key: b.dataset.key });
-  else send({ type: b.dataset.act });
-};
 
 // ---------------------------------------------------------------- render
 function render() {
@@ -152,7 +216,18 @@ function render() {
   $('harmony').textContent = '×' + S.harmony;
   $('clickval').textContent = `+${fmt(S.clickPower)} per click`;
 
-  setHTML($('upgrades'), S.upgrades.map((u) => `<div class="item"><div>${esc(u.name)} <span class="dim">(${u.count})</span><small>${esc(u.desc)}</small></div>
+  const C = S.crew;
+  const nextU = C.unlocks.find((u) => !u.done);
+  $('crewlvl').textContent = C.level;
+  setHTML($('crew'), `<div class="row" style="margin:0"><b>Crew level ${C.level}</b><span class="dim">${fmt(C.xp)} / ${fmt(C.next)} XP</span></div>
+    <div class="bar"><div style="width:${100 * C.xp / C.next}%;background:var(--gold)"></div></div>
+    <small>${nextU ? `Next at level ${nextU.level}: <b>${esc(nextU.what)}</b>` : 'Every unlock found… for now.'}</small>
+    <details><summary>Roadmap</summary>${C.unlocks.map((u) => `<div class="${u.done ? '' : 'dim'}">${u.done ? '✅' : '🔒'} Lv ${u.level}: ${esc(u.what)}</div>`).join('')}
+      <div class="dim">More to discover…</div>
+      <p class="hint">Crew XP comes from building, crafting, relighting constellations, clearing Rift floors and stardust milestones.</p></details>`);
+  setHTML($('upgrades'), S.upgrades.map((u) => u.locked
+    ? `<div class="item locked"><div>🔒 ${esc(u.name)}<small>Unlocks at crew level ${u.locked}</small></div></div>`
+    : `<div class="item"><div>${esc(u.name)} <span class="dim">(${u.count})</span><small>${esc(u.desc)}</small></div>
     <button data-buy="${u.key}" ${S.dust < u.cost ? 'disabled' : ''}>${fmt(u.cost)} ✧</button></div>`).join(''));
   setHTML($('perks'), S.perks.map((u) => `<div class="item"><div>${esc(u.name)} <span class="dim">(${u.count})</span><small>${esc(u.desc)}</small></div>
     <button data-perk="${u.key}" ${S.shards < u.cost ? 'disabled' : ''}>${fmt(u.cost)} ◆</button></div>`).join(''));
@@ -220,9 +295,14 @@ function renderSky(now) {
 
 function renderWorkshop() {
   if (dragging || document.activeElement?.type === 'range') return;
-  const W = S.workshop, r = W.rates || {};
+  if (S.locks.workshop) {
+    setHTML($('workshop'), `<p>🔒 The Workshop opens at <b>crew level ${S.locks.workshop}</b>. Keep building and relighting constellations!</p>`);
+    return;
+  }
+  const W = S.workshop, r = W.rates || { starved: {}, perMin: {} };
   const rate = (v) => (v >= 10 ? fmt(v) : (+v || 0).toFixed(2));
   const machines = W.machines.map((m) => {
+    if (m.locked) return `<div class="item locked"><div>🔒 ${esc(m.name)}<small>Unlocks at crew level ${m.locked}</small></div></div>`;
     let body = '';
     if (m.intake != null) {
       const max = Math.max(m.intake, 0);
@@ -231,12 +311,15 @@ function renderWorkshop() {
           <button class="ghost small" data-act="routeMax" data-key="${m.key}" data-v="${max}">max</button></div>
           <small>Actually flowing: ${fmt(m.flow)} stardust/s${m.flow + 0.01 < Math.min(m.route, max) ? ' <span class="warn">(squeezed by conduits or production)</span>' : ''}</small>`
         : '<small>Build one to start routing.</small>';
-    } else {
-      body = m.count ? `<small>${r.lenses > 0 ? `Grinding ${rate(r.lenses * 60)} lenses/min` : 'Idle'}${r.starved ? ` <span class="warn">· starved for ${r.starved === 'starlight' ? 'Starlight' : 'Aether'}</span>` : ''}</small>` : '';
+    } else if (m.count) {
+      const pm = r.perMin?.[m.key] || 0, st = r.starved?.[m.key];
+      body = `<small>${pm > 0 ? `Making ${rate(pm)} ${esc(m.crafts)}/min` : 'Idle'}${st ? ` <span class="warn">· starved for ${st === 'iron' ? 'Meteor Iron' : st[0].toUpperCase() + st.slice(1)}</span>` : ''}</small>`;
     }
     return `<div class="machine item"><div style="flex:1"><b>${esc(m.name)}</b> <span class="dim">(${m.count})</span><small>${esc(m.desc)}</small>${body}</div>
       <button data-act="machine" data-key="${m.key}" ${S.dust < m.cost ? 'disabled' : ''}>${fmt(m.cost)} ✧</button></div>`;
   }).join('');
+  const gear = S.locks.gear ? '' : `<h3>Rift Gear <span class="dim">(permanent, paid in Starsteel)</span></h3>` + S.gear.map((g) => `<div class="item"><div>${esc(g.name)} <span class="dim">(lv ${g.level}${g.max ? '/' + g.max : ''})</span><small>${esc(g.desc)}</small></div>
+      <button data-act="gear" data-key="${g.key}" ${W.starsteel < g.cost || (g.max && g.level >= g.max) ? 'disabled' : ''}>${g.max && g.level >= g.max ? 'Max' : g.cost + ' ⛓'}</button></div>`).join('');
   setHTML($('workshop'), `
     <div class="item"><div><b>Conduits</b> <span class="dim">routing ${fmt(W.used)} / ${fmt(W.cap)} stardust/s</span>
       <div class="bar"><div style="width:${100 * W.used / W.cap}%;background:var(--violet)"></div></div></div>
@@ -247,6 +330,8 @@ function renderWorkshop() {
       <div>✨ <b>${fmt(W.starlight)}</b> Starlight <span class="dim">+${rate(r.starlight)}/s</span></div>
       <div>💧 <b>${fmt(W.aether)}</b> Aether <span class="dim">+${rate(r.aether)}/s</span></div>
       <div>🔷 <b>${Math.floor(W.lenses)}</b> Crafted Lenses <span class="dim">(${W.installed} installed)</span></div>
+      ${W.iron > 0 || W.starsteel > 0 ? `<div>🪨 <b>${fmt(W.iron)}</b> Meteor Iron <span class="dim">(dropped in the Rift)</span></div>
+      <div>⛓ <b>${Math.floor(W.starsteel)}</b> Starsteel</div>` : ''}
     </div>
     <h3>Use them</h3>
     <div class="item"><div>Press an Aether Cell <small>Fuel for one Rift Run. You hold ${S.cells}/${S.cellCap}.</small></div>
@@ -254,7 +339,8 @@ function renderWorkshop() {
     <div class="item"><div>Install a lens in the telescopes <small>Permanent +${Math.round(W.installBonus * 100)}% production each (now +${Math.round(W.installed * W.installBonus * 100)}%)</small></div>
       <button data-act="lens" data-use="install" ${W.lenses < 1 ? 'disabled' : ''}>1 🔷</button></div>
     <div class="item"><div>Peer through a lens <small>Instantly chart one hidden star on the current Star Lock</small></div>
-      <button data-act="lens" data-use="reveal" ${W.lenses < 1 ? 'disabled' : ''}>1 🔷</button></div>`);
+      <button data-act="lens" data-use="reveal" ${W.lenses < 1 ? 'disabled' : ''}>1 🔷</button></div>
+    ${gear}`);
 }
 
 function renderRift(now) {
@@ -262,9 +348,10 @@ function renderRift(now) {
   $('riftbadge').textContent = R ? '●' : '';
   if (R && R.inRun && !lastRunState) setTab('rift');
   lastRunState = !!(R && R.inRun);
+  const bottom = (html) => setHTML($('riftBottom'), html);
+
   if (!R && S.lastRun && localStorage.dismissedRun != S.lastRun.at && Date.now() - (runEndSeen[S.lastRun.at] ??= Date.now()) < 30 * 60 * 1000) {
-    // Run summary. Laid out like the fight screen so the spot where Strike was is an inert banner;
-    // the way out is lower down and only unlocks after a moment.
+    // Run summary: the arena stays where it was (inert), so leftover clicks land on nothing.
     const L = S.lastRun;
     const armed = Date.now() - runEndSeen[L.at] > 1500;
     setHTML($('rift'), `<h2>The Rift</h2>
@@ -272,13 +359,19 @@ function renderRift(now) {
       <div>${L.retreated ? 'The party made it out' : 'Party HP 0'}</div><div class="bar party"><div style="width:${L.retreated ? 100 : 0}%"></div></div>
       <div class="enemy"><div class="name" style="color:${L.retreated ? '#7ee787' : 'var(--red)'}">${L.retreated ? '🏳 Retreated safely' : '💀 The party fell'}</div>
         <div class="dim">${L.retreated ? 'from' : 'on'} floor ${L.floor}</div>
-        <div class="bar"><div></div></div><div>&nbsp;</div></div>
-      <div class="big banner">Kept ${L.kept} of ${L.satchel} Starshards</div>
-      <p class="hint">Best floor ever: ${S.bestFloor}. Spend shards on perks in the Observatory panel.</p>
+        <div class="bar"><div></div></div><div>&nbsp;</div></div>`);
+    setArena('inert', `Kept <b>${L.kept}</b> of ${L.satchel} Starshards`);
+    bottom(`<p class="hint">Best floor ever: ${S.bestFloor}. Spend shards on perks in the Observatory panel.</p>
       <div class="row"><button data-act="dismissRun" ${armed ? '' : 'disabled'}>${armed ? 'Back to the Gate' : 'Catching your breath…'}</button></div>`);
     return;
   }
   if (!R) {
+    setArena('off');
+    bottom('');
+    if (S.locks.gate) {
+      setHTML($('rift'), `<h2>The Rift</h2><p>🔒 Something stirs beyond the sky… The Rift Gate can be built at <b>crew level ${S.locks.gate}</b>.</p>`);
+      return;
+    }
     if (!S.gateDone) {
       const next = S.gate.findIndex((g) => !g.built);
       setHTML($('rift'), `<h2>The Rift Gate</h2>
@@ -291,9 +384,9 @@ function renderRift(now) {
       return;
     }
     setHTML($('rift'), `<h2>The Rift</h2>
-      <p>Everyone online dives in together, and friends can jump in later. Click to fight. Between floors, each runner drafts a boon. Every 5th floor is a boss.</p>
-      <p>Shards you earn go in the party's satchel. <b>Retreat</b> between floors to keep all of them. <b>Fall</b> and you keep only half.
-      Spend Starshards on permanent perks.</p>
+      <p>Everyone online dives in together, and friends can jump in later. <b>Targets pop up in the arena: hit them dead centre</b> for big damage.
+      Missing, or letting one fade, breaks your combo. Between floors, each runner drafts a boon. Every 5th floor is a boss.</p>
+      <p>Shards and Meteor Iron drop as you go. <b>Retreat</b> between floors to keep every shard. <b>Fall</b> and you keep half.</p>
       <p><b>Aether Cells: ${'⚗'.repeat(S.cells)}${'·'.repeat(Math.max(0, S.cellCap - S.cells))} ${S.cells}/${S.cellCap}</b>
         <span class="dim">Press more from Aether in the Workshop (${S.cellAether} each).</span></p>
       <p class="dim">Best floor reached: ${S.bestFloor || '—'} · Relighting a constellation also grants a cell.</p>
@@ -302,31 +395,31 @@ function renderRift(now) {
     return;
   }
   const members = `<div class="members"><h3>Party</h3>${R.members.map((m) => `<div><span class="${m.online ? 'on' : 'off'}">●</span> <b>${esc(m.name)}</b> · ${fmt(m.dmg)} dmg ${m.picking ? '<span class="dim">(choosing…)</span>' : ''}<br><span class="dim">${m.boons.map(esc).join(', ') || 'no boons yet'}</span></div>`).join('')}</div>`;
-  const top = `<div class="row"><b>Floor ${R.floor}</b> · satchel: ${R.shards} ◆</div>
+  const top = `<h2>The Rift</h2><div class="row"><b>Floor ${R.floor}</b> · satchel: ${R.shards} ◆</div>
     <div>Party HP ${Math.ceil(R.partyHp)}/${R.partyMaxHp}</div><div class="bar party"><div style="width:${100 * Math.max(0, R.partyHp) / R.partyMaxHp}%"></div></div>`;
-  let mid;
   if (!R.inRun) {
-    mid = `<p>Your crew is in the Rift.</p><button class="big" data-act="joinRun">Jump in!</button>`;
-  } else if (R.phase === 'fight') {
-    const e = R.enemy;
-    mid = `<div class="enemy ${e.boss ? 'boss' : ''}"><div class="name">${e.boss ? '☠ ' : ''}${esc(e.name)}</div>
-      <div class="dim">hits the party for ${e.atk} every 3s</div>
-      <div class="bar hp"><div style="width:${100 * e.hp / e.maxHp}%"></div></div><div>${fmt(e.hp)} / ${fmt(e.maxHp)}</div></div>
-      <button class="big" data-act="hit">⚔ Strike ⚔</button>
-      <p class="hint">Harmony applies here too. Strike together!</p>`;
-  } else {
-    // The banner sits exactly where Strike was, so leftover attack clicks land on something harmless.
-    // Boons sit below it and stay disabled for a moment after the kill.
-    const armed = now >= R.boonsArmAt;
-    mid = `<div class="enemy"><div class="name" style="color:#7ee787">Floor ${R.floor} cleared!</div>
-      <div class="dim">Next floor in ${secs(R.draftEndsAt - now)}s</div>
-      <div class="bar"><div></div></div><div>&nbsp;</div></div>
-      <div class="big banner">${R.myOffer ? (armed ? '↓ Choose a boon below ↓' : 'Steady…') : 'Waiting for the others to choose…'}</div>
-      <p class="hint">&nbsp;</p>` +
-      (R.myOffer ? `<div class="boons">${R.myOffer.map((b) => `<button data-act="boon" data-key="${b.key}" ${armed ? '' : 'disabled'}><b>${esc(b.name)}</b><small>${esc(b.desc)}</small></button>`).join('')}</div>` : '') +
-      `<div class="row"><button data-act="retreat" class="ghost">🏳 Retreat now with all ${R.shards} ◆</button></div>`;
+    setHTML($('rift'), top + `<p>Your crew is in the Rift.</p>`);
+    setArena('off');
+    bottom(`<button class="big" data-act="joinRun">Jump in!</button>${members}`);
+    return;
   }
-  setHTML($('rift'), `<h2>The Rift</h2>${top}${mid}${members}`);
+  if (R.phase === 'fight') {
+    const e = R.enemy;
+    setHTML($('rift'), top + `<div class="enemy ${e.boss ? 'boss' : ''}"><div class="name">${e.boss ? '☠ ' : ''}${esc(e.name)}</div>
+      <div class="dim">hits the party for ${e.atk} every 3s</div>
+      <div class="bar hp"><div style="width:${100 * e.hp / e.maxHp}%"></div></div><div>${fmt(e.hp)} / ${fmt(e.maxHp)}</div></div>`);
+    setArena('fight', '', R.arena);
+    bottom(`<p class="hint">Click targets as close to the centre as you can. Bullseyes crit; combos stack up to ×3. Harmony applies when you strike together.</p>${members}`);
+    return;
+  }
+  // Draft: the arena goes inert in place; boons sit below it and unlock after a moment.
+  const armed = now >= R.boonsArmAt;
+  setHTML($('rift'), top + `<div class="enemy"><div class="name" style="color:#7ee787">Floor ${R.floor} cleared!</div>
+      <div class="dim">Next floor in ${secs(R.draftEndsAt - now)}s</div>
+      <div class="bar"><div></div></div><div>&nbsp;</div></div>`);
+  setArena('inert', R.myOffer ? (armed ? '↓ Choose a boon below ↓' : 'Steady…') : 'Waiting for the others to choose…');
+  bottom((R.myOffer ? `<div class="boons">${R.myOffer.map((b) => `<button data-act="boon" data-key="${b.key}" ${armed ? '' : 'disabled'}><b>${esc(b.name)}</b><small>${esc(b.desc)}</small></button>`).join('')}</div>` : '') +
+    `<div class="row"><button data-act="retreat" class="ghost">🏳 Retreat now with all ${R.shards} ◆</button></div>${members}`);
 }
 
 setInterval(render, 500); // keep countdowns ticking between server updates

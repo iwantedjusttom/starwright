@@ -26,7 +26,7 @@ test('solving relights a constellation and multiplies', () => {
   r.puzzle.stars.forEach((i) => (r.puzzle.board[i] = 1));
   g.act(r, 'a', { type: 'submit' }, new Set(['a']), 1000);
   assert.strictEqual(r.level, 1);
-  assert.strictEqual(r.mult, 1.5);
+  assert.strictEqual(r.mult, 1.25);
   assert.strictEqual(r.puzzle.size, 6);
 });
 
@@ -100,6 +100,9 @@ test('boon picks are ignored for a moment after a kill (stray Strike clicks)', (
 test('the Rift needs a finished Gate, and each stage needs its milestone', () => {
   const r = setup(); const on = new Set(['a']);
   r.dust = 1e6;
+  assert.match(g.act(r, 'a', { type: 'gate' }, on, 0), /crew level 4/);
+  r.crewLevel = 4;
+  r.dust = 1e6;
   assert.match(g.act(r, 'a', { type: 'startRun' }, on, 0), /Gate/);
   assert.match(g.act(r, 'a', { type: 'gate' }, on, 0), /Telescopes/);
   r.upgrades.telescope = 10;
@@ -117,11 +120,13 @@ test('workshop: routing feeds machines, limited by machines, conduits and produc
   const r = setup(); const on = new Set(['a']);
   r.upgrades.telescope = 200; // 200 dust/s
   r.dust = 1e6;
+  assert.match(g.act(r, 'a', { type: 'machine', key: 'prism' }, on, 0), /crew level 3/);
+  r.crewLevel = 3; r.lastTick = 0;
   g.act(r, 'a', { type: 'machine', key: 'prism' }, on, 0);
   g.act(r, 'a', { type: 'route', key: 'prism', value: 1000 }, on, 0);
   r.lastTick = 0;
   g.tick(r, 10 * 1000);
-  // 1 prism takes at most 25/s → 2.5 starlight/s; bank gets the other 175/s
+  // 1 prism takes at most 25/s → 2.5 starlight/s; bank gets the other 175/s (plus the milestone/XP side effects don't touch dust)
   assert.ok(Math.abs(r.workshop.starlight - 25) < 1e-6);
   assert.ok(Math.abs(r.dust - (1e6 - 300 + 1750)) < 1e-6);
   // conduits (50/s) are shared proportionally
@@ -139,7 +144,7 @@ test('workshop: grinders turn starlight + aether into lenses, and report the bot
   g.tick(r, 1000); g.tick(r, 2000); // short ticks so rates are recorded
   for (let t = 3000; t <= 40000; t += 1000) g.tick(r, t);
   assert.ok(Math.abs(r.workshop.lenses - 2.5) < 1e-6, String(r.workshop.lenses)); // aether ran out
-  assert.strictEqual(r.workshop.rates.starved, 'aether');
+  assert.strictEqual(r.workshop.rates.starved.grinder, 'aether');
   r.workshop.lenses = 2;
   g.act(r, 'a', { type: 'lens', use: 'install' }, on, 40000);
   const before = r.puzzle.revealed;
@@ -189,4 +194,57 @@ test('a new run cannot start in the first moments after one ends (stray Strike c
   assert.strictEqual(r.bestFloor, 1);
   g.act(r, 'a', { type: 'startRun' }, on, t + 4000);
   assert.ok(r.run);
+});
+
+test('crew XP levels the crew up and unlocks things in order', () => {
+  const r = setup(); const on = new Set(['a']);
+  r.dust = 1e9;
+  assert.match(g.act(r, 'a', { type: 'buy', key: 'chart' }, on, 0), /crew level 2/);
+  for (let i = 0; i < 60; i++) g.act(r, 'a', { type: 'buy', key: 'telescope' }, on, 0); // 60 × 1 XP
+  assert.strictEqual(r.crewLevel, 2);
+  assert.strictEqual(g.act(r, 'a', { type: 'buy', key: 'chart' }, on, 0), null);
+  assert.match(r.feed.find((f) => f.text.includes('level 2')).text, /Star Chart/);
+  const v = g.view(r, 'a', on, 0);
+  assert.strictEqual(v.upgrades.find((u) => u.key === 'dome').locked, 4);
+  assert.strictEqual(v.crew.next, 96);
+});
+
+test('rift hits: accuracy and combo matter; hits are rate-limited', () => {
+  const r = setup(); const on = new Set(['a']);
+  gateReady(r);
+  g.act(r, 'a', { type: 'startRun' }, on, 0);
+  r.run.enemy.hp = r.run.enemy.maxHp = 1e9;
+  const dmg = (acc, combo, t) => { const b = r.run.enemy.hp; g.act(r, 'a', { type: 'hit', acc, combo }, on, t); return b - r.run.enemy.hp; };
+  const graze = dmg(0, 0, 1000), bull = dmg(1, 0, 2000), comboBull = dmg(1, 20, 3000);
+  assert.ok(bull > graze * 3, `${bull} vs ${graze}`);
+  assert.ok(Math.abs(comboBull / bull - 2) < 1e-9);
+  assert.strictEqual(dmg(1, 0, 3010), 0); // too fast after the last hit
+  const a = g.view(r, 'a', on, 3000).run.arena;
+  assert.ok(a.radius > 20 && a.lifeMs > 0);
+});
+
+test('rift kills drop Meteor Iron; the Starforge turns it into Starsteel for gear', () => {
+  const r = setup(); const on = new Set(['a']);
+  gateReady(r); r.crewLevel = 7;
+  g.act(r, 'a', { type: 'startRun' }, on, 0);
+  let t = 0;
+  while (r.run.phase === 'fight') { t += 100; g.act(r, 'a', { type: 'hit', acc: 1, combo: 5 }, on, t); }
+  assert.ok(r.workshop.iron >= 1);
+  Object.assign(r.workshop, { iron: 50, aether: 200 });
+  r.workshop.machines.forge = 1;
+  r.lastTick = t;
+  for (let k = 1; k <= 61; k++) g.tick(r, t + k * 1000, on);
+  assert.ok(Math.abs(r.workshop.starsteel - 2) < 0.05, String(r.workshop.starsteel));
+  r.workshop.starsteel = 2;
+  assert.strictEqual(g.act(r, 'a', { type: 'gear', key: 'blade' }, on, t), null);
+  assert.strictEqual(r.gear.blade, 1);
+});
+
+test('old worlds get crew XP for past progress and the additive constellation bonus', () => {
+  const r = setup();
+  delete r.xp; delete r.crewLevel; delete r.gear;
+  r.level = 1; r.mult = 1.5; r.upgrades.telescope = 5; r.upgrades.mirrors = 1; r.gate = 3;
+  g.normalize(r);
+  assert.strictEqual(r.mult, 1.25);
+  assert.strictEqual(r.crewLevel, 6); // owns a Mirror Array, which unlocks at 6
 });

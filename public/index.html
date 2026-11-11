@@ -18,6 +18,7 @@
   <div id="game" class="hidden">
     <header>
       <div><b id="dust">0</b> stardust <span class="dim">(<span id="dps">0</span>/s<span id="routed"></span>)</span></div>
+      <div>Crew <b>Lv <span id="crewlvl">1</span></b></div>
       <div><b id="shards">0</b> Starshards</div>
       <div>Multiplier <b id="mult">×1</b></div>
       <div>Harmony <b id="harmony">×1</b></div>
@@ -26,6 +27,7 @@
 
     <main>
       <section class="col">
+        <div id="crew" class="crewbox"></div>
         <h2>Observatory</h2>
         <button id="polish" class="big">✧ Polish the lens ✧<br><small id="clickval"></small></button>
         <p class="hint">Click together: everyone clicking within 1.5s multiplies <i>all</i> clicks (Harmony).</p>
@@ -70,6 +72,8 @@
 
         <div id="tab-rift" class="hidden">
           <div id="rift"></div>
+          <div id="arena" class="hidden"><div id="arenaMsg"></div><div id="combo"></div></div>
+          <div id="riftBottom"></div>
         </div>
       </section>
 

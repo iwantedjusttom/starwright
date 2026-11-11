@@ -3,13 +3,29 @@
 
 // ---------------------------------------------------------------- tuning
 const UPGRADES = {
-  telescope: { name: 'Brass Telescope', base: 15, growth: 1.15, dps: 1, desc: '+1 stardust/sec' },
-  chart: { name: 'Star Chart Table', base: 120, growth: 1.15, dps: 8, desc: '+8 stardust/sec' },
-  dome: { name: 'Observatory Dome', base: 1300, growth: 1.15, dps: 47, desc: '+47 stardust/sec' },
-  mirrors: { name: 'Mirror Array', base: 14000, growth: 1.15, dps: 260, desc: '+260 stardust/sec' },
+  telescope: { name: 'Brass Telescope', base: 15, growth: 1.18, dps: 1, desc: '+1 stardust/sec' },
+  chart: { name: 'Star Chart Table', base: 120, growth: 1.18, dps: 8, desc: '+8 stardust/sec' },
+  dome: { name: 'Observatory Dome', base: 1300, growth: 1.18, dps: 47, desc: '+47 stardust/sec' },
+  mirrors: { name: 'Mirror Array', base: 14000, growth: 1.18, dps: 260, desc: '+260 stardust/sec' },
+  harvester: { name: 'Comet Harvester', base: 220000, growth: 1.18, dps: 1500, desc: '+1,500 stardust/sec' },
   cloth: { name: 'Polishing Cloth', base: 50, growth: 1.6, click: 1, desc: '+1 stardust per click' },
   ink: { name: 'Charting Ink', base: 500, growth: 1.8, chart: 0.25, desc: 'Auto-charting 25% faster' },
 };
+
+// ---- Crew levels: almost everything the crew does earns XP; each level unlocks something new.
+const UNLOCKS = [
+  { level: 1, keys: ['telescope', 'cloth'], what: 'Brass Telescopes, Polishing Cloth and the Star Lock' },
+  { level: 2, keys: ['chart'], what: 'Star Chart Tables' },
+  { level: 3, keys: ['workshop', 'prism', 'condenser', 'ink'], what: 'The Workshop (Prisms & Condensers), Charting Ink' },
+  { level: 4, keys: ['dome', 'gate'], what: 'Observatory Domes and Rift Gate construction' },
+  { level: 5, keys: ['grinder'], what: 'Lens Grinders (Crafted Lenses)' },
+  { level: 6, keys: ['mirrors'], what: 'Mirror Arrays' },
+  { level: 7, keys: ['forge', 'gear'], what: 'The Starforge and Rift Gear (from Meteor Iron)' },
+  { level: 8, keys: ['harvester'], what: 'Comet Harvesters' },
+];
+const UNLOCK_LEVEL = Object.fromEntries(UNLOCKS.flatMap((u) => u.keys.map((k) => [k, u.level])));
+const xpToNext = (lvl) => Math.round(60 * Math.pow(1.6, lvl - 1));
+const XP = { building: 1, machine: 4, conduit: 8, constellation: 60, gate: 40, floor: 5, boss: 30, lens: 3, cell: 5, perk: 10, starsteel: 6, gear: 15, milestone: 25 };
 
 // The Rift Gate is built once, in stages. Each stage needs stardust AND something stardust can't buy directly.
 const GATE_STAGES = [
@@ -25,12 +41,21 @@ const CELL_AETHER = 300;
 const MACHINES = {
   prism: { name: 'Prism', base: 300, growth: 1.3, intake: 25, desc: 'Turns up to 25 stardust/s into Starlight (10 : 1)' },
   condenser: { name: 'Condenser', base: 400, growth: 1.3, intake: 25, desc: 'Turns up to 25 stardust/s into Aether (25 : 1)' },
-  grinder: { name: 'Lens Grinder', base: 2500, growth: 1.35, desc: 'Every 10s: 20 Starlight + 10 Aether → 1 Crafted Lens' },
+  grinder: { name: 'Lens Grinder', base: 2500, growth: 1.35, desc: 'Every 10s: 20 Starlight + 10 Aether → 1 Crafted Lens',
+    craft: { inputs: { starlight: 20, aether: 10 }, out: 'lenses', secs: 10 } },
+  forge: { name: 'Starforge', base: 60000, growth: 1.5, desc: 'Every 30s: 5 Meteor Iron + 20 Aether → 1 Starsteel',
+    craft: { inputs: { iron: 5, aether: 20 }, out: 'starsteel', secs: 30 } },
+};
+const RESOURCE_NAMES = { starlight: 'Starlight', aether: 'Aether', iron: 'Meteor Iron', lenses: 'Crafted Lenses', starsteel: 'Starsteel' };
+
+// Rift Gear: permanent, bought with Starsteel from the Starforge.
+const GEAR = {
+  blade: { name: 'Starsteel Blade', base: 2, growth: 1.6, desc: '+20% damage in the Rift' },
+  ward: { name: 'Starsteel Ward', base: 2, growth: 1.6, desc: '+15 party max HP' },
+  sight: { name: 'Starsteel Sight', base: 3, growth: 1.8, max: 5, desc: 'Rift targets 8% bigger' },
 };
 const STARLIGHT_PER_DUST = 1 / 10;
 const AETHER_PER_DUST = 1 / 25;
-const LENS_COST = { starlight: 20, aether: 10 };
-const LENS_SECONDS = 10;
 const LENS_INSTALL_BONUS = 0.03;
 const conduitCap = (room) => 50 * Math.pow(2, room.workshop.conduits);
 const conduitCost = (room) => Math.ceil(2000 * Math.pow(3, room.workshop.conduits));
@@ -39,7 +64,7 @@ const conduitCost = (room) => Math.ceil(2000 * Math.pow(3, room.workshop.conduit
 const PERKS = {
   echo: { name: 'Rift Echo', base: 3, growth: 1.6, desc: '+10% stardust production (permanent)' },
   hull: { name: 'Hardened Hull', base: 4, growth: 1.7, desc: '+15 starting party HP in runs' },
-  keen: { name: 'Keen Eye', base: 5, growth: 1.8, desc: '+1 damage per click in runs' },
+  keen: { name: 'Keen Eye', base: 5, growth: 1.8, desc: '+1 base damage per hit in runs' },
   cartographer: { name: 'Cartographer', base: 6, growth: 2, desc: 'Auto-charting 20% faster' },
 };
 
@@ -52,13 +77,16 @@ const LENSES = {
 };
 
 const BOONS = {
-  sharp: { name: 'Sharpened Lens', desc: '+2 damage per click' },
-  twin: { name: 'Twin Stars', desc: '+15% chance a click hits twice' },
+  sharp: { name: 'Sharpened Lens', desc: '+2 base damage per hit' },
+  twin: { name: 'Twin Stars', desc: '+15% chance a hit lands twice' },
+  steady: { name: 'Steady Hand', desc: 'Your targets are 12% bigger and last longer' },
+  focus: { name: 'Focus', desc: 'Bullseyes deal +100% more' },
+  flow: { name: 'Flow State', desc: 'Your combo builds twice as fast' },
   bond: { name: 'Constellation Bond', desc: '+25% damage for each other runner' },
-  mend: { name: 'Mending Light', desc: 'Your clicks heal the party a little' },
+  mend: { name: 'Mending Light', desc: 'Your hits heal the party a little' },
   bulwark: { name: 'Bulwark', desc: '+20 party max HP (and heal 20)' },
   starfall: { name: 'Starfall', desc: 'Each new enemy starts with 6% less HP' },
-  resonance: { name: 'Resonance', desc: 'Your clicks count as one extra player for Harmony' },
+  resonance: { name: 'Resonance', desc: 'Your hits count as one extra player for Harmony' },
   ember: { name: 'Ember Core', desc: 'Deal passive damage every second' },
 };
 
@@ -75,7 +103,9 @@ const MAX_OFFLINE_SEC = 7 * 24 * 3600;
 const DRAFT_MS = 25 * 1000;
 const ENEMY_ATTACK_MS = 3000;
 const RUN_COOLDOWN_MS = 3000;
-const BOON_ARM_MS = 1000; // ignore boon picks right after a kill (stray Strike clicks)
+const BOON_ARM_MS = 1000;
+const HIT_MIN_GAP_MS = 90; // server-side cap on hits per player
+const CONSTELLATION_BONUS = 0.25; // each relit constellation adds +25% (additive) // ignore boon picks right after a kill (stray Strike clicks)
 
 // ---------------------------------------------------------------- helpers
 const shuffle = (a) => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
@@ -161,14 +191,16 @@ function newRoom(id, now = Date.now()) {
     run: null, runsLaunched: 0, bestFloor: 0,
     gate: 0, cells: 0,
     workshop: newWorkshop(),
+    xp: 0, crewLevel: 1, milestone: 0,
+    gear: Object.fromEntries(Object.keys(GEAR).map((k) => [k, 0])),
   };
   log(room, 'The observatory creaks open. Polish the lenses, chart the sky, and relight the first constellation.', now);
   return room;
 }
 
 function newWorkshop() {
-  return { machines: { prism: 0, condenser: 0, grinder: 0 }, route: { prism: 0, condenser: 0 },
-    conduits: 0, starlight: 0, aether: 0, lenses: 0, installed: 0, grindProgress: 0, rates: null };
+  return { machines: Object.fromEntries(Object.keys(MACHINES).map((k) => [k, 0])), route: { prism: 0, condenser: 0 },
+    conduits: 0, starlight: 0, aether: 0, iron: 0, lenses: 0, starsteel: 0, installed: 0, progress: {}, rates: null };
 }
 
 // Gross production (before anything is routed to the Workshop).
@@ -192,6 +224,18 @@ const clickPower = (room) => (1 + room.upgrades.cloth) * room.mult;
 const chartRate = (room) => (1 + 0.25 * room.upgrades.ink) * (1 + 0.2 * room.perks.cartographer) / BASE_CHART_SECONDS;
 const runCost = (room) => Math.max(500, Math.floor(dps(room) * 300)); // ~5 min of production, plus 1 Aether Cell
 const gateDone = (room) => room.gate >= GATE_STAGES.length;
+const unlocked = (room, key) => room.crewLevel >= (UNLOCK_LEVEL[key] || 1);
+const lockMsg = (key) => `Unlocks at crew level ${UNLOCK_LEVEL[key]}.`;
+
+function gainXp(room, amount, now) {
+  room.xp += amount;
+  while (room.xp >= xpToNext(room.crewLevel)) {
+    room.xp -= xpToNext(room.crewLevel);
+    room.crewLevel++;
+    const u = UNLOCKS.find((x) => x.level === room.crewLevel);
+    log(room, `🎉 The crew reached level ${room.crewLevel}!${u ? ` Unlocked: ${u.what}.` : ''}`, now);
+  }
+}
 
 // Fill in fields added after a world was first saved.
 function normalize(room) {
@@ -205,12 +249,31 @@ function normalize(room) {
     room.workshop.machines.condenser += room.upgrades.condenser;
   }
   for (const k of Object.keys(room.upgrades)) if (!UPGRADES[k]) delete room.upgrades[k];
+  const w = room.workshop;
+  for (const k of Object.keys(MACHINES)) if (w.machines[k] == null) w.machines[k] = 0;
+  for (const k of ['iron', 'starsteel']) if (w[k] == null) w[k] = 0;
+  if (!w.progress) { w.progress = { grinder: w.grindProgress || 0 }; delete w.grindProgress; }
+  if (!room.gear) room.gear = Object.fromEntries(Object.keys(GEAR).map((k) => [k, 0]));
+  if (room.xp == null) {
+    // Worlds from before crew levels: credit what they've already done, and switch constellations to the additive bonus.
+    const buildings = Object.values(room.upgrades).reduce((a, b) => a + b, 0);
+    const machines = Object.values(w.machines).reduce((a, b) => a + b, 0);
+    room.xp = 0; room.crewLevel = 1; room.milestone = 0;
+    gainXp(room, buildings * XP.building + machines * XP.machine + room.level * XP.constellation + room.gate * XP.gate
+      + (room.bestFloor || 0) * 8 + Math.floor(w.installed) * XP.lens, room.lastTick);
+    room.mult = 1 + CONSTELLATION_BONUS * room.level;
+    // Never lock a crew out of something it already owns.
+    const owned = [...Object.keys(room.upgrades).filter((k) => room.upgrades[k] > 0),
+      ...Object.keys(w.machines).filter((k) => w.machines[k] > 0), ...(room.gate > 0 ? ['gate'] : [])];
+    const floor = Math.max(1, ...owned.map((k) => UNLOCK_LEVEL[k] || 1));
+    if (room.crewLevel < floor) { room.crewLevel = floor; room.xp = 0; }
+  }
   return room;
 }
 
 function harmonyAt(room, now) {
   let h = 0;
-  for (const p of Object.values(room.players)) if (now - (p.lastClick || 0) <= HARMONY_WINDOW_MS) h++;
+  for (const p of Object.values(room.players)) if (p.lastClick && now - p.lastClick <= HARMONY_WINDOW_MS) h++;
   return Math.max(1, h);
 }
 
@@ -231,7 +294,8 @@ function tick(room, now, online = new Set()) {
   const f = flows(room);
   const gain = (dps(room) - f.used) * dt;
   room.dust += gain; room.totalDust += gain;
-  runWorkshop(room, f, dt);
+  runWorkshop(room, f, dt, now);
+  checkMilestones(room, now);
 
   const p = room.puzzle;
   let charted = 0;
@@ -249,24 +313,43 @@ function tick(room, now, online = new Set()) {
   return { dt, gain, charted };
 }
 
-function runWorkshop(room, f, dt) {
+function checkMilestones(room, now) {
+  // XP each time total stardust earned passes 1K, 10K, 100K, ...
+  while (room.totalDust >= Math.pow(10, room.milestone + 3)) {
+    room.milestone++;
+    log(room, `📜 Milestone: the crew has gathered ${(Math.pow(10, room.milestone + 2)).toLocaleString()} stardust in total.`, now);
+    gainXp(room, XP.milestone, now);
+  }
+}
+
+function runWorkshop(room, f, dt, now) {
   const w = room.workshop;
   w.starlight += f.prism * STARLIGHT_PER_DUST * dt;
   w.aether += f.condenser * AETHER_PER_DUST * dt;
-  // Grinders: limited by machine time and by whichever input runs short.
-  let lenses = 0, starved = null;
-  if (w.machines.grinder > 0 && dt > 0) {
-    w.grindProgress += w.machines.grinder * dt / LENS_SECONDS;
-    const byStarlight = w.starlight / LENS_COST.starlight, byAether = w.aether / LENS_COST.aether;
-    const possible = Math.min(w.grindProgress, byStarlight, byAether);
-    if (possible < w.grindProgress) starved = byStarlight <= byAether ? 'starlight' : 'aether';
-    lenses = possible;
-    w.starlight -= possible * LENS_COST.starlight;
-    w.aether -= possible * LENS_COST.aether;
-    w.lenses += possible;
-    w.grindProgress = Math.min(w.grindProgress - possible, w.machines.grinder); // don't bank unlimited idle machine time
+  // Crafters: limited by machine time and by whichever input runs short.
+  const crafted = {}, starved = {};
+  for (const [key, def] of Object.entries(MACHINES)) {
+    if (!def.craft || !w.machines[key] || dt <= 0) continue;
+    const c = def.craft;
+    w.progress[key] = (w.progress[key] || 0) + w.machines[key] * dt / c.secs;
+    let possible = w.progress[key], short = null;
+    for (const [res, amt] of Object.entries(c.inputs)) {
+      const can = w[res] / amt;
+      if (can < possible) { possible = can; short = res; }
+    }
+    if (short) starved[key] = short;
+    for (const [res, amt] of Object.entries(c.inputs)) w[res] -= possible * amt;
+    const before = Math.floor(w[c.out]);
+    w[c.out] += possible;
+    crafted[key] = possible;
+    const made = Math.floor(w[c.out]) - before;
+    if (made > 0) gainXp(room, made * (c.out === 'lenses' ? XP.lens : XP.starsteel), now);
+    w.progress[key] = Math.min(w.progress[key] - possible, w.machines[key]); // don't bank unlimited idle machine time
   }
-  if (dt > 0 && dt < 5) w.rates = { starlight: f.prism * STARLIGHT_PER_DUST, aether: f.condenser * AETHER_PER_DUST, lenses: lenses / dt, starved };
+  if (dt > 0 && dt < 5) {
+    w.rates = { starlight: f.prism * STARLIGHT_PER_DUST, aether: f.condenser * AETHER_PER_DUST, starved, perMin: {} };
+    for (const [k, v] of Object.entries(crafted)) w.rates.perMin[k] = v / dt * 60;
+  }
 }
 
 function revealStar(room) {
@@ -284,7 +367,7 @@ function spawnEnemy(run, now) {
   const boss = f % 5 === 0;
   const party = Object.keys(run.members).length;
   const partyFactor = 0.6 + 0.4 * party;
-  let hp = Math.round(25 * Math.pow(1.32, f - 1) * partyFactor * (boss ? 4 : 1));
+  let hp = Math.round(120 * Math.pow(1.28, f - 1) * partyFactor * (boss ? 3 : 1));
   const starfall = Object.values(run.members).reduce((s, m) => s + (m.boons.starfall || 0), 0);
   const maxHp = hp;
   hp = Math.max(1, Math.round(hp * Math.max(0.3, 1 - 0.06 * starfall)));
@@ -307,7 +390,7 @@ function startRun(room, pid, online, now) {
   room.run = run;
   for (const id of online) joinRun(room, id, now, true);
   if (!run.members[pid]) joinRun(room, pid, now, true);
-  run.partyMaxHp = 50 + 10 * Object.keys(run.members).length + 15 * room.perks.hull;
+  run.partyMaxHp = 50 + 10 * Object.keys(run.members).length + 15 * room.perks.hull + 15 * room.gear.ward;
   run.partyHp = run.partyMaxHp;
   spawnEnemy(run, now);
   log(room, `🌀 ${room.players[pid].name} tore open the Rift! ${Object.keys(run.members).length} runner(s) dive in.`, now);
@@ -325,14 +408,31 @@ function joinRun(room, pid, now, silent) {
   return null;
 }
 
-function memberDamage(room, run, pid, harmony) {
+// Damage for one target hit. acc: 0 (edge) … 1 (dead centre). combo: consecutive hits without a miss.
+function memberDamage(room, run, pid, harmony, acc, combo) {
   const m = run.members[pid];
   const others = Object.keys(run.members).length - 1;
-  let d = 1 + 2 * (m.boons.sharp || 0) + room.perks.keen + Math.log10(1 + dps(room)) ;
+  let d = 4 + 2 * (m.boons.sharp || 0) + room.perks.keen + 0.5 * Math.log10(1 + dps(room));
+  d *= acc >= 0.85 ? 2.5 + (m.boons.focus || 0) : 0.6 + 1.2 * acc; // bullseye vs. off-centre
+  d *= 1 + 0.05 * Math.min(combo * (1 + (m.boons.flow || 0)), 40); // up to ×3 at a long combo
+  d *= 1 + 0.2 * room.gear.blade;
   d *= 1 + 0.25 * others * (m.boons.bond || 0);
   d *= harmony + (m.boons.resonance || 0);
   if (Math.random() < 0.15 * (m.boons.twin || 0)) d *= 2;
   return d;
+}
+
+// Per-player target settings for the arena (the client spawns the targets).
+function arenaFor(room, run, pid) {
+  const m = run.members[pid] || { boons: {} };
+  const f = run.floor, boss = run.enemy && run.enemy.boss;
+  const size = (1 + 0.08 * Math.min(room.gear.sight, GEAR.sight.max)) * (1 + 0.12 * (m.boons.steady || 0));
+  return {
+    radius: Math.round(Math.max(18, 40 - f * 0.9) * (boss ? 0.8 : 1) * size),
+    lifeMs: Math.round(Math.max(650, 1500 - f * 35) * (1 + 0.15 * (m.boons.steady || 0))),
+    spawnMs: Math.round(Math.max(300, 480 - f * 8)),
+    max: boss ? 4 : 3,
+  };
 }
 
 function hitEnemy(room, run, dmg, now) {
@@ -340,8 +440,11 @@ function hitEnemy(room, run, dmg, now) {
   run.enemy.hp -= dmg;
   if (run.enemy.hp <= 0) {
     const shardGain = run.enemy.boss ? 5 + run.floor : 1 + Math.floor(run.floor / 3);
+    const iron = (run.enemy.boss ? 8 : 1) + Math.floor(run.floor / 2);
     run.shards += shardGain;
-    log(room, `⚔ Floor ${run.floor}: ${run.enemy.name} shattered! (+${shardGain} shards in the satchel)`, now);
+    room.workshop.iron += iron;
+    gainXp(room, XP.floor + run.floor + (run.enemy.boss ? XP.boss : 0), now);
+    log(room, `⚔ Floor ${run.floor}: ${run.enemy.name} shattered! (+${shardGain} shards in the satchel, +${iron} Meteor Iron)`, now);
     run.phase = 'draft';
     run.draftStartedAt = now;
     run.draftEndsAt = now + DRAFT_MS;
@@ -397,7 +500,7 @@ function tickRun(room, now, dt, online) {
   const secs = (now - run.lastPassive) / 1000;
   if (secs >= 1) {
     const embers = Object.values(run.members).reduce((s, m) => s + (m.boons.ember || 0), 0);
-    if (embers) hitEnemy(room, run, embers * 2 * run.floor * secs, now);
+    if (embers) hitEnemy(room, run, embers * 4 * run.floor * secs, now);
     run.lastPassive = now;
   }
   if (run.phase !== 'fight') return;
@@ -424,23 +527,28 @@ function act(room, pid, msg, online, now = Date.now()) {
     case 'buy': {
       const def = UPGRADES[msg.key];
       if (!def) return 'No such upgrade.';
+      if (!unlocked(room, msg.key)) return lockMsg(msg.key);
       const c = cost(def, room.upgrades[msg.key]);
       if (room.dust < c) return 'Not enough stardust.';
       room.dust -= c; room.upgrades[msg.key]++;
       log(room, `${me.name} built a ${def.name} (#${room.upgrades[msg.key]}).`, now);
+      gainXp(room, XP.building, now);
       return null;
     }
     case 'machine': {
       const def = MACHINES[msg.key];
       if (!def) return 'No such machine.';
+      if (!unlocked(room, msg.key)) return lockMsg(msg.key);
       const c = cost(def, room.workshop.machines[msg.key]);
       if (room.dust < c) return 'Not enough stardust.';
       room.dust -= c; room.workshop.machines[msg.key]++;
       log(room, `🔧 ${me.name} built a ${def.name} (#${room.workshop.machines[msg.key]}).`, now);
+      gainXp(room, XP.machine, now);
       return null;
     }
     case 'route': {
       if (!['prism', 'condenser'].includes(msg.key)) return 'Can\'t route to that.';
+      if (!unlocked(room, 'workshop')) return lockMsg('workshop');
       const v = Math.max(0, Math.min(Number(msg.value) || 0, 1e15));
       room.workshop.route[msg.key] = v;
       return null;
@@ -448,8 +556,10 @@ function act(room, pid, msg, online, now = Date.now()) {
     case 'conduit': {
       const c = conduitCost(room);
       if (room.dust < c) return `Wider conduits cost ${c} stardust.`;
+      if (!unlocked(room, 'workshop')) return lockMsg('workshop');
       room.dust -= c; room.workshop.conduits++;
       log(room, `🔧 ${me.name} widened the conduits to ${conduitCap(room)} stardust/s.`, now);
+      gainXp(room, XP.conduit, now);
       return null;
     }
     case 'pressCell': {
@@ -457,6 +567,7 @@ function act(room, pid, msg, online, now = Date.now()) {
       if (room.workshop.aether < CELL_AETHER) return `Pressing a cell takes ${CELL_AETHER} Aether.`;
       room.workshop.aether -= CELL_AETHER; room.cells++;
       log(room, `⚗ ${me.name} pressed an Aether Cell (${room.cells}/${CELL_CAP}).`, now);
+      gainXp(room, XP.cell, now);
       return null;
     }
     case 'lens': {
@@ -478,9 +589,11 @@ function act(room, pid, msg, online, now = Date.now()) {
     case 'gate': {
       const st = GATE_STAGES[room.gate];
       if (!st) return 'The Gate is already complete.';
+      if (!unlocked(room, 'gate')) return lockMsg('gate');
       if (!st.met(room)) return `Not yet: ${st.need}.`;
       if (room.dust < st.cost) return `The ${st.name} costs ${st.cost} stardust.`;
       room.dust -= st.cost; room.gate++;
+      gainXp(room, XP.gate, now);
       if (gateDone(room)) {
         room.cells = Math.max(room.cells, 1);
         log(room, `🌀 ${me.name} set the Keystone. The Rift Gate is complete and holds its first Aether Cell!`, now);
@@ -494,6 +607,19 @@ function act(room, pid, msg, online, now = Date.now()) {
       if (room.shards < c) return 'Not enough Starshards.';
       room.shards -= c; room.perks[msg.key]++;
       log(room, `${me.name} forged ${def.name} ${room.perks[msg.key]}.`, now);
+      gainXp(room, XP.perk, now);
+      return null;
+    }
+    case 'gear': {
+      const def = GEAR[msg.key];
+      if (!def) return 'No such gear.';
+      if (!unlocked(room, 'gear')) return lockMsg('gear');
+      if (def.max && room.gear[msg.key] >= def.max) return 'That can\'t be improved any further.';
+      const c = cost(def, room.gear[msg.key]);
+      if (room.workshop.starsteel < c) return 'Not enough Starsteel.';
+      room.workshop.starsteel -= c; room.gear[msg.key]++;
+      log(room, `🗡 ${me.name} forged a ${def.name} (level ${room.gear[msg.key]}).`, now);
+      gainXp(room, XP.gear, now);
       return null;
     }
     case 'cell': {
@@ -527,13 +653,14 @@ function act(room, pid, msg, online, now = Date.now()) {
         return null;
       }
       const name = CONSTELLATIONS[room.level % CONSTELLATIONS.length] + (room.level >= CONSTELLATIONS.length ? ` ${Math.floor(room.level / CONSTELLATIONS.length) + 1}` : '');
-      const bonus = Math.max(50, dps(room) * 120);
+      const bonus = Math.max(50, dps(room) * 60);
       room.solved.push({ name, at: now, by: me.name });
-      room.level++; room.mult *= 1.5;
+      room.level++; room.mult = 1 + CONSTELLATION_BONUS * room.level;
       if (room.cells < CELL_CAP) room.cells++; // relighting a constellation also condenses a cell
       room.dust += bonus; room.totalDust += bonus;
       room.puzzle = makePuzzle(room.level);
-      log(room, `★ ${name} blazes back to life! Everything is now ×1.5 stronger, plus ${Math.round(bonus)} stardust.`, now);
+      log(room, `★ ${name} blazes back to life! Production +${Math.round(CONSTELLATION_BONUS * 100)}% (now ×${room.mult.toFixed(2)}), plus ${Math.round(bonus).toLocaleString()} stardust.`, now);
+      gainXp(room, XP.constellation, now);
       return null;
     }
     case 'notes': room.notes = String(msg.text || '').slice(0, 5000); return null;
@@ -548,8 +675,11 @@ function act(room, pid, msg, online, now = Date.now()) {
       const run = room.run;
       if (!run || !run.members[pid]) return 'You are not in the run.';
       if (run.phase !== 'fight') return null;
-      me.lastClick = now;
-      const d = memberDamage(room, run, pid, harmonyAt(room, now));
+      if (now - (me.lastHit || 0) < HIT_MIN_GAP_MS) return null;
+      me.lastHit = now; me.lastClick = now;
+      const acc = Math.max(0, Math.min(1, Number(msg.acc) || 0));
+      const combo = Math.max(0, Math.min(100, msg.combo | 0));
+      const d = memberDamage(room, run, pid, harmonyAt(room, now), acc, combo);
       run.members[pid].dmg += d;
       if (run.members[pid].boons.mend) run.partyHp = Math.min(run.partyMaxHp, run.partyHp + 0.3 * run.members[pid].boons.mend);
       hitEnemy(room, run, d, now);
@@ -586,7 +716,14 @@ function view(room, pid, online, now = Date.now()) {
     harmony: harmonyAt(room, now), level: room.level,
     constellation: CONSTELLATIONS[room.level % CONSTELLATIONS.length],
     solved: room.solved,
-    upgrades: Object.entries(UPGRADES).map(([key, d]) => ({ key, name: d.name, desc: d.desc, count: room.upgrades[key], cost: cost(d, room.upgrades[key]) })),
+    upgrades: Object.entries(UPGRADES).map(([key, d]) => ({ key, name: d.name, desc: d.desc, count: room.upgrades[key], cost: cost(d, room.upgrades[key]),
+      locked: unlocked(room, key) ? null : UNLOCK_LEVEL[key] })),
+    crew: {
+      level: room.crewLevel, xp: room.xp, next: xpToNext(room.crewLevel),
+      unlocks: UNLOCKS.map((u) => ({ level: u.level, what: u.what, done: room.crewLevel >= u.level })),
+    },
+    locks: { workshop: unlocked(room, 'workshop') ? null : UNLOCK_LEVEL.workshop, gate: unlocked(room, 'gate') ? null : UNLOCK_LEVEL.gate, gear: unlocked(room, 'gear') ? null : UNLOCK_LEVEL.gear },
+    gear: Object.entries(GEAR).map(([key, d]) => ({ key, name: d.name, desc: d.desc, level: room.gear[key], max: d.max || null, cost: cost(d, room.gear[key]) })),
     gate: GATE_STAGES.map((st, i) => ({ name: st.name, cost: st.cost, need: st.need, met: st.met(room), built: i < room.gate })),
     gateDone: gateDone(room),
     cells: room.cells, cellCap: CELL_CAP, cellAether: CELL_AETHER, netDps: netDps(room),
@@ -594,9 +731,10 @@ function view(room, pid, online, now = Date.now()) {
       const w = room.workshop, f = flows(room);
       return {
         machines: Object.entries(MACHINES).map(([key, d]) => ({ key, name: d.name, desc: d.desc, count: w.machines[key], cost: cost(d, w.machines[key]),
-          intake: d.intake ? d.intake * w.machines[key] : null, route: w.route[key] ?? null, flow: f[key] ?? null })),
+          intake: d.intake ? d.intake * w.machines[key] : null, route: w.route[key] ?? null, flow: f[key] ?? null,
+          crafts: d.craft ? RESOURCE_NAMES[d.craft.out] : null, locked: unlocked(room, key) ? null : UNLOCK_LEVEL[key] })),
         used: f.used, cap: f.cap, conduitCost: conduitCost(room),
-        starlight: w.starlight, aether: w.aether, lenses: w.lenses, installed: w.installed,
+        starlight: w.starlight, aether: w.aether, iron: w.iron, starsteel: w.starsteel, lenses: w.lenses, installed: w.installed,
         installBonus: LENS_INSTALL_BONUS, rates: w.rates,
       };
     })(),
@@ -626,6 +764,7 @@ function view(room, pid, online, now = Date.now()) {
       enemy: run.enemy && { name: run.enemy.name, boss: run.enemy.boss, hp: Math.max(0, run.enemy.hp), maxHp: run.enemy.maxHp, atk: run.enemy.atk },
       draftEndsAt: run.draftEndsAt, boonsArmAt: (run.draftStartedAt || 0) + BOON_ARM_MS,
       inRun: !!run.members[pid],
+      arena: run.members[pid] ? arenaFor(room, run, pid) : null,
       myOffer: run.drafts[pid] ? run.drafts[pid].map((k) => ({ key: k, ...BOONS[k] })) : null,
       members: Object.entries(run.members).map(([id, m]) => ({
         name: room.players[id]?.name || '?', online: online.has(id), dmg: Math.round(m.dmg),
