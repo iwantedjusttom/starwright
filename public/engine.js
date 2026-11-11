@@ -175,11 +175,8 @@
     return s;
   }
 
-  // Price to raise a component one level: Essence (from salvaging runes and components) plus stardust.
-  const upgradeCost = (it) => {
-    const cells = COMPONENTS[it.type].cells.length;
-    return { essence: Math.ceil(4 * cells * Math.pow(3, it.lvl - 1)), dust: Math.ceil(1000 * cells * Math.pow(6, it.lvl - 1)) };
-  };
+  // Essence to raise a component one level (bigger shapes and higher levels cost more): ×3.5 per level.
+  const upgradeCost = (it) => ({ essence: Math.ceil(8 * COMPONENTS[it.type].cells.length * Math.pow(3.5, it.lvl - 1)) });
   // Essence from salvaging: a rune is worth the three runes it would take to fuse it; components by rarity and level.
   const runeEssence = (r) => Math.pow(3, r.rank - 1);
   const itemEssence = (it) => (RARITIES[it.rarity || 'common'].essence) * it.lvl;

@@ -34,13 +34,7 @@ function loadRoom(id) {
       await saving.get(id);
       const state = game.normalize((await store.load(id)) || game.newRoom(id));
       const now = Date.now();
-      const away = now - state.lastTick;
-      const before = state.dust;
-      game.tick(state, now); // offline catch-up
-      if (away > 60 * 1000) {
-        const gained = Math.round(state.dust - before);
-        state.feed.push({ t: now, text: `While everyone was away (${fmtDuration(away)}): +${gained.toLocaleString()} stardust.` });
-      }
+      game.tick(state, now); // catch up: a dive that was running while everyone was away plays out
       const r = { state, clients: new Map(), dirty: true };
       rooms.set(id, r);
       return r;

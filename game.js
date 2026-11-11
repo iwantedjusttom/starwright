@@ -2,7 +2,7 @@
 // Pure game logic for Starwright. No I/O here — server.js handles sockets & saving.
 //
 // The loop:
-//   Idle buildings make stardust → each player builds a machine: shaped components packed into a grid, powered by
+//   Each player builds a machine: shaped components packed into a grid, powered by
 //   runes in their sockets, boosting the components they touch → send machines into the Rift, where they fight on
 //   their own (online players can click overcharge targets, and hit linked targets together) → bring back runes and
 //   components, or lose some of what was installed if the machine is destroyed → stronger machines (Resonance)
@@ -12,20 +12,9 @@ const Engine = require('./public/engine');
 const { ELEMENTS, ELEMENT_KEYS, ROMAN, MAX_RANK, MAX_LEVEL, COMPONENTS, COMPONENT_KEYS } = Engine;
 
 // ---------------------------------------------------------------- tuning
-const BUILDINGS = {
-  telescope: { name: 'Brass Telescope', base: 15, growth: 1.18, dps: 1 },
-  chart: { name: 'Star Chart Table', base: 120, growth: 1.18, dps: 8 },
-  dome: { name: 'Observatory Dome', base: 1300, growth: 1.18, dps: 47 },
-  mirrors: { name: 'Mirror Array', base: 14000, growth: 1.18, dps: 260 },
-  harvester: { name: 'Comet Harvester', base: 200000, growth: 1.18, dps: 1500 },
-  forge: { name: 'Nebula Forge', base: 3000000, growth: 1.18, dps: 9000 },
-};
-const CLOTH = { name: 'Polishing Cloth', base: 50, growth: 1.6 }; // +1 stardust per click
-
 const ENEMIES = ['Void Moth', 'Dust Wraith', 'Hollow Comet', 'Gloam Eel', 'Shard Golem', 'Null Choir', 'Eclipse Hound'];
 const BOSSES = ['The Unlit King', 'Mother of Static', 'The Ninth Silence'];
 
-const HARMONY_WINDOW_MS = 1500;
 const MAX_OFFLINE_SEC = 7 * 24 * 3600;
 const ENEMY_ATTACK_MS = 6000;
 const FLOOR_PAUSE_MS = 1500;
@@ -40,7 +29,7 @@ const TIER_HP = 2.6, TIER_ATK = 1.75; // how much tougher each Rift Tier is
 const FORMATION = 0.15;
 const BLOCK_WINDOW_MS = 1500; // the shield target shows up this long before an enemy attack lands
 const MAX_CHARGE = 5;
-const VERSION = 6;
+const VERSION = 7;
 
 // Resonance a machine needs to unlock each Rift Tier: 30, 66, 145, 320, 700, 1.5K, 3.4K, 7.5K …
 // (×2.2 per tier, because machine power grows multiplicatively: each rune rank doubles a socket, each level adds 50%)
@@ -49,12 +38,11 @@ const tierFor = (res) => { let t = 1; while (res >= tierReq(t + 1)) t++; return 
 
 // ---------------------------------------------------------------- helpers
 const shuffle = (a) => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
-const cost = (def, n) => Math.ceil(def.base * Math.pow(def.growth, n));
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 const runeName = (r) => `${ELEMENTS[r.el].name} ${ROMAN[r.rank]}`;
 const compName = (it) => `${Engine.itemName(it)}${it.lvl > 1 ? ' +' + (it.lvl - 1) : ''}`;
 const refOf = (pid) => crypto.createHash('sha1').update(String(pid)).digest('hex').slice(0, 8); // public handle; pids stay private
-const expandCost = (m) => Math.ceil(50000 * Math.pow(6, m.w + m.h - 7)); // 50K, 300K, 1.8M, 10.8M, 65M, 389M
+const expandCost = (m) => Math.ceil(60 * Math.pow(3, m.w + m.h - 7)); // Essence: 60, 180, 540, 1.6K, 4.9K, 14.6K
 
 function log(room, text, now = Date.now()) {
   room.feed.push({ t: now, text });
@@ -75,23 +63,21 @@ function starterMachine(room) {
   return { w: 4, h: 3, items: [place('lance', 0, 0), place('coil', 3, 0), place('shield', 0, 1), place('pump', 2, 1)] };
 }
 const newPlayer = (name, now) => ({ name, el: null, pouch: [], storage: [], machine: null, recallPct: 0.3, essence: 0,
-  contributed: 0, clicks: 0, lastClick: 0, lastSeen: now, lastDive: null });
+  lastClick: 0, lastSeen: now, lastDive: null });
 
 // ---------------------------------------------------------------- room
 function newRoom(id, now = Date.now()) {
   const room = {
     version: VERSION, id, createdAt: now, lastTick: now,
-    dust: 0, totalDust: 0,
-    buildings: Object.fromEntries(Object.keys(BUILDINGS).map((k) => [k, 0])),
-    cloth: 0, maxTier: 1, nextId: 1,
+    maxTier: 1, nextId: 1,
     players: {}, feed: [],
     dive: null, divesLaunched: 0, bestFloor: 0,
   };
-  log(room, 'The observatory creaks open. Choose your element, build your machine, and send it into the Rift.', now);
+  log(room, 'The workshop lights flicker on. Choose your element, build your machine, and send it into the Rift.', now);
   return room;
 }
 
-// Convert worlds saved by older versions: keep stardust, buildings, players, their elements and runes.
+// Convert worlds saved by older versions: keep players, their elements, runes, machines and tiers.
 function normalize(room) {
   if (room.version === VERSION) return room;
   if (room.version === 4) {
@@ -103,28 +89,25 @@ function normalize(room) {
   }
   if (room.version === 5) {
     // Loot update: components gain rarity; runes and spare components can be salvaged into Essence for upgrades.
-    room.version = VERSION;
+    room.version = 6;
     for (const p of Object.values(room.players)) {
       p.essence = p.essence || 0;
       delete p.crates;
       for (const it of [...(p.machine?.items || []), ...p.storage]) { it.rarity = it.rarity || 'common'; it.mods = it.mods || []; }
     }
     log(room, '🎲 Components now drop with random rarities, sockets and modifiers. Salvage spare runes and components into Essence to upgrade the ones you love.', room.lastTick);
-    return room;
   }
+  if (room.version === 6) toMachinesOnly(room);
+  if (room.version === VERSION) return room;
   const fresh = newRoom(room.id, room.lastTick || Date.now());
-  const oldBuildings = room.buildings || room.upgrades || {};
-  for (const k of Object.keys(BUILDINGS)) fresh.buildings[k] = oldBuildings[k] || 0;
   Object.assign(fresh, {
-    cloth: room.cloth ?? room.upgrades?.cloth ?? 0,
-    createdAt: room.createdAt || fresh.createdAt, lastTick: room.lastTick || fresh.lastTick,
-    dust: room.dust || 0, totalDust: room.totalDust || 0, feed: room.feed || [],
+    createdAt: room.createdAt || fresh.createdAt, lastTick: room.lastTick || fresh.lastTick, feed: room.feed || [],
     bestFloor: room.bestFloor || 0, maxTier: room.maxTier || 1, nextId: Math.max(room.nextRuneId || 1, room.nextId || 1),
   });
   const pids = Object.keys(room.players || {});
   for (const pid of pids) {
     const p = room.players[pid];
-    const np = Object.assign(newPlayer(p.name, p.lastSeen || 0), { el: p.el || null, pouch: p.pouch || [], contributed: p.contributed || 0, clicks: p.clicks || 0 });
+    const np = Object.assign(newPlayer(p.name, p.lastSeen || 0), { el: p.el || null, pouch: p.pouch || [], essence: STARTING_ESSENCE });
     if (np.el) np.machine = starterMachine(fresh);
     fresh.players[pid] = np;
   }
@@ -135,19 +118,18 @@ function normalize(room) {
   return fresh;
 }
 
+// The idle observatory was removed: stardust and buildings go away, and everyone gets some Essence to start with.
+const STARTING_ESSENCE = 60;
+function toMachinesOnly(room) {
+  room.version = VERSION;
+  for (const k of ['dust', 'totalDust', 'buildings', 'cloth']) delete room[k];
+  for (const p of Object.values(room.players)) { p.essence = (p.essence || 0) + STARTING_ESSENCE; delete p.contributed; delete p.clicks; }
+  log(room, `🛠 The observatory is gone: Starwright is all about machines now. Every kill in the Rift drops Essence, diving is free, and everyone got ${STARTING_ESSENCE} Essence to start.`, room.lastTick);
+}
+
 const machineStats = (p) => (p.machine ? Engine.stats(p.machine) : { dmg: 0, hp: 0, armor: 0, regen: 0, loot: 0, resonance: 0, power: {} });
 const bestResonance = (room) => Math.max(0, ...Object.values(room.players).map((p) => machineStats(p).resonance));
 const totalResonance = (room) => Object.values(room.players).reduce((s, p) => s + machineStats(p).resonance, 0);
-const baseDps = (room) => Object.entries(BUILDINGS).reduce((s, [k, d]) => s + d.dps * room.buildings[k], 0);
-const dps = (room) => baseDps(room) * (1 + totalResonance(room) / 200); // stronger machines also boost the observatory
-const clickPower = (room) => 1 + room.cloth;
-const diveCost = (room, tier) => Math.max(100 * tier * tier, Math.floor(baseDps(room) * 60 * (1 + 0.5 * (tier - 1))));
-
-function harmonyAt(room, now) {
-  let h = 0;
-  for (const p of Object.values(room.players)) if (p.lastClick && now - p.lastClick <= HARMONY_WINDOW_MS) h++;
-  return Math.max(1, h);
-}
 
 function ensurePlayer(room, pid, name, now = Date.now()) {
   if (!room.players[pid]) {
@@ -171,10 +153,8 @@ function checkTiers(room, now) {
 function tick(room, now, online = new Set()) {
   const dt = Math.min(Math.max(0, (now - room.lastTick) / 1000), MAX_OFFLINE_SEC);
   room.lastTick = now;
-  const gain = dps(room) * dt;
-  room.dust += gain; room.totalDust += gain;
   if (room.dive) simulateDive(room, now, online);
-  return { dt, gain };
+  return { dt };
 }
 
 // ---------------------------------------------------------------- the rift (machines fight on their own)
@@ -210,10 +190,15 @@ function dropRune(room, pid, tier, boss) {
   return newRune(room, el, rank);
 }
 
+// Essence each machine collects from a kill: more on deeper floors and higher tiers, lots from bosses.
+const essenceFor = (tier, floor, boss) => Math.round((2 + Math.floor(floor / 3)) * Math.pow(1.8, tier - 1) * (boss ? 4 : 1));
+
 function killEnemy(room, dive, t) {
   const boss = dive.enemy.boss;
   const found = [];
+  const essence = essenceFor(dive.tier, dive.floor, boss);
   for (const [pid, u] of fighting(dive)) {
+    u.loot.essence += essence;
     const runes = 1 + (boss ? 1 : 0) + (Math.random() < u.stats.loot ? 1 : 0);
     for (let i = 0; i < runes; i++) { const r = dropRune(room, pid, dive.tier, boss); u.loot.runes.push(r); found.push(runeName(r)); }
     if (boss || Math.random() < 0.15) {
@@ -221,7 +206,7 @@ function killEnemy(room, dive, t) {
       u.loot.comps.push(it); found.push(`${compName(it)} (${RARITY_NAMES[it.rarity]})`);
     }
   }
-  log(room, `⚔ Floor ${dive.floor}: ${dive.enemy.name} shattered! Found: ${found.join(', ')}.`, t);
+  log(room, `⚔ Floor ${dive.floor}: ${dive.enemy.name} shattered! Found: ${found.join(', ')} (+${essence} Essence each).`, t);
   room.bestFloor = Math.max(room.bestFloor, dive.floor);
   dive.floor++;
   dive.enemy = null;
@@ -234,6 +219,8 @@ function leaveDive(room, dive, pid, destroyed, t) {
   u.status = destroyed ? 'destroyed' : 'recalled';
   const keep = (arr) => (destroyed ? arr.slice(0, Math.floor(arr.length / 2)) : arr);
   const runes = keep(u.loot.runes), comps = keep(u.loot.comps);
+  const essence = destroyed ? Math.floor((u.loot.essence || 0) / 2) : (u.loot.essence || 0);
+  p.essence = (p.essence || 0) + essence;
   const lostItems = [], lostRunes = [];
   if (destroyed && p.machine) {
     p.machine.items = p.machine.items.filter((it) => {
@@ -243,10 +230,10 @@ function leaveDive(room, dive, pid, destroyed, t) {
     });
   }
   p.pouch.push(...runes); p.storage.push(...comps);
-  p.lastDive = { tier: dive.tier, floor: dive.floor, destroyed, at: t, runes: runes.length, comps: comps.map(compName), lostItems, lostRunes };
+  p.lastDive = { tier: dive.tier, floor: dive.floor, destroyed, at: t, runes: runes.length, comps: comps.map(compName), essence, lostItems, lostRunes };
   log(room, destroyed
-    ? `💥 ${p.name}'s machine was destroyed on floor ${dive.floor}. Saved ${runes.length} rune(s)${comps.length ? ` and ${comps.length} component(s)` : ''}; lost ${lostItems.length ? lostItems.join(', ') : 'no components'}${lostRunes.length ? ` and ${lostRunes.length} socketed rune(s)` : ''}.`
-    : `🏳 ${p.name}'s machine came home from floor ${dive.floor} with ${runes.length} rune(s)${comps.length ? ` and ${comps.map(compName).join(', ')}` : ''}.`, t);
+    ? `💥 ${p.name}'s machine was destroyed on floor ${dive.floor}. Saved ${runes.length} rune(s), ${essence} Essence${comps.length ? ` and ${comps.length} component(s)` : ''}; lost ${lostItems.length ? lostItems.join(', ') : 'no components'}${lostRunes.length ? ` and ${lostRunes.length} socketed rune(s)` : ''}.`
+    : `🏳 ${p.name}'s machine came home from floor ${dive.floor} with ${runes.length} rune(s), ${essence} Essence${comps.length ? ` and ${comps.map(compName).join(', ')}` : ''}.`, t);
   if (!fighting(dive).length) { room.dive = null; log(room, `The Rift closes behind the last machine.`, t); }
 }
 
@@ -317,14 +304,12 @@ function startDive(room, pid, now, tier) {
   const s = machineStats(p);
   if (s.dmg <= 0) return 'Your machine has no working weapon. Socket a rune into a weapon first.';
   tier = room.dive ? room.dive.tier : Math.max(1, Math.min(room.maxTier, tier | 0 || room.maxTier));
-  const c = diveCost(room, tier);
-  if (room.dust < c) return `Sending a machine into Tier ${tier} costs ${Math.ceil(c).toLocaleString()} stardust.`;
-  room.dust -= c; room.divesLaunched++;
+  room.divesLaunched++;
   if (!room.dive) {
     room.dive = { tier, floor: 1, startedAt: now, simAt: now, units: {}, enemy: null, pauseUntil: now + 1000, links: [], linkResults: [], nextLinkAt: now + 4000 };
     log(room, `🌀 ${p.name} opened a Tier ${tier} Rift and sent their machine in.`, now);
   } else log(room, `🌀 ${p.name}'s machine joined the dive on floor ${room.dive.floor}.`, now);
-  room.dive.units[pid] = { status: 'fighting', stats: { ...s, power: undefined }, hp: s.hp, charge: 0, loot: { runes: [], comps: [] } };
+  room.dive.units[pid] = { status: 'fighting', stats: { ...s, power: undefined }, hp: s.hp, charge: 0, loot: { runes: [], comps: [], essence: 0 } };
   return null;
 }
 
@@ -343,27 +328,6 @@ function act(room, pid, msg, online, now = Date.now()) {
   const changed = (what) => { const after = Engine.stats(m).resonance; log(room, `🔧 ${me.name} ${what}: Resonance ${before} → ${after}.`, now); checkTiers(room, now); };
 
   switch (msg.type) {
-    case 'click': {
-      me.lastClick = now; me.clicks++;
-      const g = clickPower(room) * harmonyAt(room, now);
-      room.dust += g; room.totalDust += g; me.contributed += g;
-      return null;
-    }
-    case 'buy': {
-      if (msg.key === 'cloth') {
-        const c = cost(CLOTH, room.cloth);
-        if (room.dust < c) return 'Not enough stardust.';
-        room.dust -= c; room.cloth++;
-        return null;
-      }
-      const def = BUILDINGS[msg.key];
-      if (!def) return 'No such building.';
-      const c = cost(def, room.buildings[msg.key]);
-      if (room.dust < c) return 'Not enough stardust.';
-      room.dust -= c; room.buildings[msg.key]++;
-      log(room, `${me.name} built a ${def.name} (#${room.buildings[msg.key]}).`, now);
-      return null;
-    }
     case 'element': {
       if (!ELEMENTS[msg.el]) return 'No such element.';
       if (me.el === msg.el) return null;
@@ -373,6 +337,7 @@ function act(room, pid, msg, online, now = Date.now()) {
         me.machine = starterMachine(room);
         for (let i = 0; i < 4; i++) me.pouch.push(newRune(room, msg.el, 1));
         for (let i = 0; i < 2; i++) me.pouch.push(newRune(room, pick(ELEMENT_KEYS), 1));
+        me.essence = (me.essence || 0) + STARTING_ESSENCE;
       }
       log(room, `${ELEMENTS[msg.el].icon} ${me.name} is now attuned to ${ELEMENTS[msg.el].name}${first ? ' and built a starter machine' : ''}.`, now);
       return null;
@@ -442,15 +407,14 @@ function act(room, pid, msg, online, now = Date.now()) {
       me.essence += got;
       return null;
     }
-    case 'upgrade': { // Essence + stardust raise a component's level
+    case 'upgrade': { // Essence raises a component's level
       const it = findItem(msg.itemId);
       if (!it) return 'You don\'t have that component.';
       if (diving && m.items.includes(it)) return 'Your machine is in the Rift. Recall it to make changes.';
       if (it.lvl >= MAX_LEVEL) return 'That component is already at its highest level.';
       const c = Engine.upgradeCost(it);
-      if (me.essence < c.essence) return `Upgrading needs ${c.essence} Essence. Salvage spare runes or components to get more.`;
-      if (room.dust < c.dust) return `Upgrading also costs ${c.dust.toLocaleString()} stardust.`;
-      me.essence -= c.essence; room.dust -= c.dust; it.lvl++;
+      if (me.essence < c.essence) return `Upgrading needs ${c.essence.toLocaleString()} Essence. Dive deeper or salvage spares to get more.`;
+      me.essence -= c.essence; it.lvl++;
       if (m && m.items.includes(it)) changed(`upgraded ${compName(it)}`);
       else log(room, `⚙ ${me.name} upgraded a stored ${compName(it)}.`, now);
       return null;
@@ -459,8 +423,8 @@ function act(room, pid, msg, online, now = Date.now()) {
       const dir = msg.dir === 'h' ? 'h' : 'w';
       if ((dir === 'w' && m.w >= MAX_W) || (dir === 'h' && m.h >= MAX_H)) return 'The machine can\'t grow any further that way.';
       const c = expandCost(m);
-      if (room.dust < c) return `Expanding costs ${c.toLocaleString()} stardust.`;
-      room.dust -= c; m[dir]++;
+      if (me.essence < c) return `Expanding costs ${c.toLocaleString()} Essence.`;
+      me.essence -= c; m[dir]++;
       log(room, `📦 ${me.name} expanded their machine to ${m.w}×${m.h}.`, now);
       return null;
     }
@@ -531,19 +495,11 @@ function act(room, pid, msg, online, now = Date.now()) {
 // ---------------------------------------------------------------- views
 function view(room, pid, online, now = Date.now()) {
   const me = room.players[pid], dive = room.dive;
-  const keys = Object.keys(BUILDINGS);
-  const lastOwned = keys.reduce((mx, k, i) => (room.buildings[k] > 0 ? i : mx), -1);
   const nameOf = (id) => room.players[id]?.name || '?';
   const myUnit = dive?.units[pid];
   return {
-    dust: room.dust, dps: dps(room), clickPower: clickPower(room), harmony: harmonyAt(room, now),
-    buildings: keys.slice(0, lastOwned + 2).map((key) => {
-      const d = BUILDINGS[key];
-      return { key, name: d.name, desc: `+${d.dps.toLocaleString()} stardust/sec`, count: room.buildings[key], cost: cost(d, room.buildings[key]) };
-    }),
-    cloth: { key: 'cloth', name: CLOTH.name, desc: '+1 stardust per click', count: room.cloth, cost: cost(CLOTH, room.cloth) },
     totalResonance: totalResonance(room),
-    tiers: { max: room.maxTier, nextReq: tierReq(room.maxTier + 1), ladder: Array.from({ length: 4 }, (_, i) => ({ tier: room.maxTier + 1 + i, req: tierReq(room.maxTier + 1 + i) })), costs: Array.from({ length: room.maxTier }, (_, i) => diveCost(room, i + 1)) },
+    tiers: { max: room.maxTier, nextReq: tierReq(room.maxTier + 1), ladder: Array.from({ length: 4 }, (_, i) => ({ tier: room.maxTier + 1 + i, req: tierReq(room.maxTier + 1 + i) })) },
     you: {
       pid, ref: refOf(pid), name: me.name, el: me.el, pouch: me.pouch, storage: me.storage, machine: me.machine,
       recallPct: me.recallPct, expandCost: me.machine ? expandCost(me.machine) : 0, maxW: MAX_W, maxH: MAX_H, essence: me.essence || 0,
@@ -569,4 +525,4 @@ function view(room, pid, online, now = Date.now()) {
   };
 }
 
-module.exports = { normalize, newRoom, tick, act, view, ensurePlayer, dps, tierReq, tierFor, refOf, machineStats, BUILDINGS };
+module.exports = { normalize, newRoom, tick, act, view, ensurePlayer, tierReq, tierFor, refOf, machineStats, essenceFor };

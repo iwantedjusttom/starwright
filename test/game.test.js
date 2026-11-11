@@ -18,12 +18,6 @@ function armed(r, pid) {
   return m;
 }
 
-test('idle: buildings produce stardust while everyone is away', () => {
-  const r = setup(); r.buildings.telescope = 10;
-  g.tick(r, 3600 * 1000);
-  assert.strictEqual(Math.round(r.dust), 36000);
-});
-
 test('shapes rotate, and pieces cannot overlap or leave the grid', () => {
   assert.deepStrictEqual(Engine.cellsFor('lance', 1), [[0, 0], [0, 1], [0, 2]]);
   const m = { w: 3, h: 3, items: [item(1, 'lance', 0, 0)] };
@@ -74,13 +68,14 @@ test('choosing an element builds a starter machine; socketing, storing and placi
 });
 
 test('fusing runes, expanding the machine, giving to a friend', () => {
-  const r = setup(); r.dust = 1e6;
+  const r = setup();
   g.act(r, 'a', { type: 'element', el: 'tide' }, solo, 0);
   const p = r.players.a;
   p.pouch = [rune('tide'), rune('tide'), rune('tide')];
   g.act(r, 'a', { type: 'fuseRunes', el: 'tide', rank: 1 }, solo, 0);
   assert.deepStrictEqual(p.pouch.map((q) => q.rank), [2]);
   p.storage = [item(10, 'pump', 0, 0, 0, [rune('tide'), null], 2)];
+  p.essence = 100;
   g.act(r, 'a', { type: 'expand', dir: 'w' }, solo, 0);
   assert.strictEqual(p.machine.w, 5);
   g.act(r, 'a', { type: 'give', itemId: p.storage[0].id, to: g.refOf('b') }, both, 0);
@@ -158,13 +153,13 @@ test('stronger machines unlock higher tiers; higher tiers are tougher', () => {
   assert.ok(r.dive.enemy.maxHp > 60 * 2.5);
 });
 
-test('worlds from older versions keep stardust, buildings, players, elements and runes', () => {
+test('worlds from older versions keep players, elements and runes (stardust and buildings are gone)', () => {
   const old = { version: 3, id: 'old', lastTick: 0, dust: 5000, buildings: { telescope: 4 }, cloth: 1, maxTier: 2, nextRuneId: 50,
     engine: { size: 3, grid: [{ id: 7, el: 'sun', rank: 2 }, null] },
     players: { a: { name: 'Ann', el: 'moon', pouch: [{ id: 8, el: 'moon', rank: 1 }] }, b: { name: 'Bo', el: null, pouch: [] } }, feed: [], bestFloor: 6 };
   const r = g.normalize(old);
-  assert.strictEqual(r.version, 6);
-  assert.strictEqual(r.dust, 5000);
+  assert.strictEqual(r.version, 7);
+  assert.strictEqual(r.dust, undefined); assert.strictEqual(r.buildings, undefined);
   assert.strictEqual(r.maxTier, 1, 'tiers are re-measured from actual machines (starters have no runes socketed)');
   assert.strictEqual(r.players.a.el, 'moon');
   assert.ok(r.players.a.machine && r.players.a.machine.items.length === 4);
@@ -180,15 +175,16 @@ test('tier curve: 30, 66, 145, 319, … (×2.2); worlds from the Star Engine era
   r.version = 4; r.maxTier = 7; // a v4 save carried over an old-scale tier
   const res = g.machineStats(r.players.a).resonance;
   g.normalize(r);
-  assert.strictEqual(r.version, 6);
+  assert.strictEqual(r.version, 7);
   assert.strictEqual(r.maxTier, g.tierFor(res));
-  assert.strictEqual(r.players.a.essence, 0);
+  assert.strictEqual(r.players.a.essence, 60 + 60, 'starter Essence from choosing an element, plus the observatory refund');
   assert.strictEqual(r.players.a.machine.items[0].rarity, 'common');
   assert.ok(r.feed.some((f) => /re-measured/.test(f.text)));
 });
 
-test('salvaging runes and components into Essence; upgrades cost Essence + stardust', () => {
+test('salvaging runes and components into Essence; upgrades and grid space cost Essence', () => {
   const r = setup(); const m = armed(r, 'a'); const p = r.players.a;
+  p.essence = 0;
   p.pouch = [rune('tide', 1), rune('tide', 3)];
   g.act(r, 'a', { type: 'salvage', runeIds: p.pouch.map((q) => q.id) }, solo, 0);
   assert.strictEqual(p.essence, 1 + 9);
@@ -197,13 +193,29 @@ test('salvaging runes and components into Essence; upgrades cost Essence + stard
   assert.strictEqual(p.essence, 10 + 60, 'epic (30) × level 2');
   assert.strictEqual(p.pouch.length, 1, 'its rune came back');
   const lance = m.items.find((it) => it.type === 'lance');
-  r.dust = 1e9; p.essence = 5;
-  assert.match(g.act(r, 'a', { type: 'upgrade', itemId: lance.id }, solo, 0), /12 Essence/);
+  p.essence = 5;
+  assert.match(g.act(r, 'a', { type: 'upgrade', itemId: lance.id }, solo, 0), /24 Essence/);
   p.essence = 100;
   g.act(r, 'a', { type: 'upgrade', itemId: lance.id }, solo, 0);
-  assert.strictEqual(lance.lvl, 2);
-  assert.strictEqual(p.essence, 88); assert.strictEqual(r.dust, 1e9 - 3000);
-  assert.match(g.act(r, 'a', { type: 'crate' }, solo, 0), /Unknown/);
+  assert.strictEqual(lance.lvl, 2); assert.strictEqual(p.essence, 76);
+  p.essence = 1000;
+  g.act(r, 'a', { type: 'expand', dir: 'w' }, solo, 0);
+  g.act(r, 'a', { type: 'expand', dir: 'h' }, solo, 0);
+  assert.strictEqual(p.essence, 1000 - 60 - 180);
+  assert.strictEqual(g.view(r, 'a', solo, 0).you.expandCost, 540);
+  assert.match(g.act(r, 'a', { type: 'buy', key: 'telescope' }, solo, 0), /Unknown/);
+});
+
+test('every kill drops Essence; diving is free; destroyed machines keep half', () => {
+  const r = setup(); armed(r, 'a'); const p = r.players.a;
+  const before = p.essence;
+  assert.strictEqual(g.act(r, 'a', { type: 'dive' }, solo, 0), null);
+  r.dive.units.a.stats.hp = r.dive.units.a.hp = 1e9;
+  g.tick(r, 1500, solo); r.dive.enemy.hp = 1; g.tick(r, 1750, solo); // floor 1
+  assert.strictEqual(r.dive.units.a.loot.essence, g.essenceFor(1, 1, false));
+  g.act(r, 'a', { type: 'recall' }, solo, 2000);
+  assert.strictEqual(p.essence, before + g.essenceFor(1, 1, false));
+  assert.ok(g.essenceFor(3, 10, true) > 20 * g.essenceFor(1, 1, false), 'deep floors, high tiers and bosses pay much more');
 });
 
 test('rolled components: rarities, random sockets and modifiers that change stats', () => {
@@ -234,17 +246,6 @@ test('boss kills drop rolled components', () => {
   g.tick(r, 1750, solo);
   const c = r.dive.units.a.loot.comps[0];
   assert.ok(c && Engine.RARITIES[c.rarity] && Array.isArray(c.mods) && c.runes.length === Engine.COMPONENTS[c.type].sockets.length);
-});
-
-test('inventory space is expensive: 50K, then 6× per expansion', () => {
-  const r = setup(); armed(r, 'a');
-  r.dust = 49999;
-  assert.match(g.act(r, 'a', { type: 'expand', dir: 'w' }, solo, 0), /50,000/);
-  r.dust = 1e9;
-  g.act(r, 'a', { type: 'expand', dir: 'w' }, solo, 0);
-  g.act(r, 'a', { type: 'expand', dir: 'h' }, solo, 0);
-  assert.strictEqual(r.dust, 1e9 - 50000 - 300000);
-  assert.strictEqual(g.view(r, 'a', solo, 0).you.expandCost, 1800000);
 });
 
 test('formation: machines diving together hit harder than the same machines alone', () => {

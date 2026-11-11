@@ -9,34 +9,29 @@
 <body>
   <div id="join" class="join">
     <h1>✦ Starwright ✦</h1>
-    <p>A shared observatory for you and your friends. It keeps making stardust while you're gone.
-      Build machines from components and runes, and send them into the Rift together.</p>
+    <p>Build a machine from rolled components and runes, then send it into the Rift with your friends.
+      Block, overcharge and strike together to push deeper than you should be able to.</p>
     <input id="name" placeholder="Your name" maxlength="20">
     <input id="room" placeholder="Crew code (share this with friends)" maxlength="32">
-    <button id="go">Enter the observatory</button>
+    <button id="go">Enter the workshop</button>
   </div>
 
   <div id="game" class="hidden">
     <header>
-      <div><b id="dust">0</b> stardust <span class="dim">(<span id="dps">0</span>/s)</span></div>
+      <div><b id="essencehead">0</b> Essence ✦</div>
       <div>Rift Tier <b id="tierhead">1</b></div>
       <div>Crew Resonance <b id="reshead">0</b></div>
-      <div>Harmony <b id="harmony">×1</b></div>
       <div class="dim" id="roomlabel"></div>
     </header>
 
-    <main>
+    <main class="machines">
       <section class="col">
-        <h2>Observatory</h2>
-        <button id="polish" class="big">✧ Polish the lens ✧<br><small id="clickval"></small></button>
-        <p class="hint">Click together: everyone clicking within 1.5s multiplies <i>all</i> clicks (Harmony).</p>
-        <div id="buildings"></div>
-      </section>
-
-      <section class="col wide">
         <div id="rift"></div>
         <div id="arena" class="hidden"><div id="arenaMsg"></div><div id="combo"></div></div>
         <div id="riftBottom"></div>
+      </section>
+
+      <section class="col wide">
         <div id="machineBox">
           <h2>Your Machine</h2>
           <div id="elementPick"></div>
@@ -58,9 +53,10 @@
             <p class="hint">Components take up space in your machine's grid. Each has sockets (the circles) that want a certain element:
             a matching rune powers it fully, a different element only 40%, and higher-rank runes are worth more (rank II = 2×, III = 4×…).
             Many components boost the components they touch, so placement matters. Every component from the Rift is rolled:
-            a rarity (Common → Legendary), its own socket elements, and random modifiers. Salvage spare runes and components into
-            <b>Essence ✦</b>, then spend Essence plus stardust to upgrade the components you want to keep. <b>Resonance</b> is your machine's total power: it unlocks harder Rift Tiers.
-            If your machine is destroyed in the Rift, each installed component (and socketed rune) has a 30% chance to be lost.</p>
+            a rarity (Common → Legendary), its own socket elements, and random modifiers. Every kill in the Rift drops <b>Essence ✦</b>,
+            and you can salvage spare runes and components for more. Spend Essence to upgrade components and expand your grid.
+            <b>Resonance</b> is your machine's total power: it unlocks harder Rift Tiers.
+            If your machine is destroyed in the Rift, it keeps half of what it found, and each installed component (and socketed rune) has a 30% chance to be lost.</p>
             <div id="compList"></div></details>
         </div>
       </section>

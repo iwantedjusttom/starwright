@@ -82,8 +82,8 @@ const runeChip = (r, extra = '') => `<span class="rune el-${r.el} ${extra}" data
 const RAR = Engine.RARITIES;
 const compTitle = (it) => `<span style="color:${RAR[it.rarity || 'common'].color}">${esc(Engine.itemName(it))}</span>${it.lvl > 1 ? ` <span class="gold">+${it.lvl - 1}</span>` : ''}`;
 const modList = (it) => (it.mods || []).map((m) => `<li>${esc(Engine.MODS[m.k].text(m.v))}</li>`).join('');
-const costLabel = (c) => `${fmt(c.essence)} ✦ + ${fmt(c.dust)} ✧`;
-const canAfford = (c) => (S.you.essence || 0) >= c.essence && S.dust >= c.dust;
+const costLabel = (c) => `${fmt(c.essence)} ✦`;
+const canAfford = (c) => (S.you.essence || 0) >= c.essence;
 const me = () => S.you;
 const allItems = () => [...(me().machine?.items || []), ...me().storage];
 const findItem = (id) => allItems().find((it) => it.id === id);
@@ -129,15 +129,6 @@ function socketAt(x, y) {
 }
 
 // ---------------------------------------------------------------- input
-$('polish').addEventListener('pointerdown', (e) => {
-  if (!S) return;
-  send({ type: 'click' });
-  const gain = S.clickPower * S.harmony;
-  S.dust += gain;
-  $('dust').textContent = fmt(S.dust);
-  pop(e, '+' + fmt(gain));
-});
-$('buildings').onclick = (e) => { const k = e.target.closest('button')?.dataset.buy; if (k) send({ type: 'buy', key: k }); };
 $('chatform').onsubmit = (e) => { e.preventDefault(); send({ type: 'chat', text: $('chat').value }); $('chat').value = ''; };
 $('elementPick').onclick = (e) => { const el = e.target.closest('[data-el]')?.dataset.el; if (el) send({ type: 'element', el }); };
 
@@ -298,17 +289,9 @@ arena.addEventListener('pointerdown', (e) => {
 // ---------------------------------------------------------------- render
 function render() {
   if (!S) return;
-  $('dust').textContent = fmt(S.dust);
-  $('dps').textContent = fmt(S.dps);
-  $('harmony').textContent = '×' + S.harmony;
+  $('essencehead').textContent = fmt(S.you.essence || 0);
   $('tierhead').textContent = S.tiers.max;
   $('reshead').textContent = fmt(S.totalResonance);
-  $('clickval').textContent = `+${fmt(S.clickPower)} per click`;
-
-  const item = (u) => `<div class="item"><div>${esc(u.name)} <span class="dim">(${u.count})</span><small>${esc(u.desc)}</small></div>
-    <button data-buy="${u.key}" ${S.dust < u.cost ? 'disabled' : ''}>${fmt(u.cost)} ✧</button></div>`;
-  setHTML($('buildings'), S.buildings.map(item).join('') + item(S.cloth) +
-    (S.totalResonance ? `<p class="hint">Your crew's machines boost all production: ×${(1 + S.totalResonance / 200).toFixed(2)}</p>` : ''));
 
   renderRift();
   renderMachine();
@@ -380,9 +363,9 @@ function renderMachine() {
   }
   $('machineGrid').style.gridTemplateColumns = `repeat(${m.w}, 52px)`;
   setHTML($('machineGrid'), html);
-  setHTML($('expand'), locked ? '' : `<button class="small ghost" data-expand="w" ${m.w >= Y.maxW || S.dust < Y.expandCost ? 'disabled' : ''}>+ column</button>
-    <button class="small ghost" data-expand="h" ${m.h >= Y.maxH || S.dust < Y.expandCost ? 'disabled' : ''}>+ row</button>
-    <span class="dim">${fmt(Y.expandCost)} ✧</span>`);
+  setHTML($('expand'), locked ? '' : `<button class="small ghost" data-expand="w" ${m.w >= Y.maxW || Y.essence < Y.expandCost ? 'disabled' : ''}>+ column</button>
+    <button class="small ghost" data-expand="h" ${m.h >= Y.maxH || Y.essence < Y.expandCost ? 'disabled' : ''}>+ row</button>
+    <span class="dim">${fmt(Y.expandCost)} ✦</span>`);
 
   // stats with a live preview of whatever you're about to do
   const trial = trialMachine();
@@ -448,7 +431,7 @@ function renderRift() {
   const L = Y.lastDive;
   const summary = L && localStorage.seenDive != L.at && !Y.diving ? `<div class="summary ${L.destroyed ? 'bad' : 'good'}">
       <b>${L.destroyed ? `💥 Your machine was destroyed on floor ${L.floor}` : `🏳 Your machine came home from floor ${L.floor}`}</b> (Tier ${L.tier})<br>
-      Brought back ${L.runes} rune${L.runes === 1 ? '' : 's'}${L.comps.length ? ` and ${L.comps.map(esc).join(', ')}` : ''}.
+      Brought back ${fmt(L.essence || 0)} Essence, ${L.runes} rune${L.runes === 1 ? '' : 's'}${L.comps.length ? ` and ${L.comps.map(esc).join(', ')}` : ''}.
       ${L.destroyed ? `<br>Lost: ${L.lostItems.length ? L.lostItems.map(esc).join(', ') : 'no components'}${L.lostRunes.length ? `, ${L.lostRunes.length} socketed rune(s)` : ''}.` : ''}
       <button class="small ghost" data-act="dismiss">OK</button></div>` : '';
 
@@ -472,10 +455,9 @@ function renderRift() {
   const t = S.tiers.max;
   if (!selectedTier || selectedTier > t) selectedTier = t;
   const tier = D ? D.tier : selectedTier;
-  const cost = S.tiers.costs[tier - 1];
   setHTML($('rift'), `<h2>The Rift</h2>${summary}
     ${D ? `<p><b>A Tier ${D.tier} dive is underway</b> (floor ${D.floor}).</p>${units(D)}` : `<p>Send your machine into the Rift. It fights on its own, floor by floor, and keeps going while you're away.
-      Every kill drops runes (mostly your element) and sometimes components; bosses always drop a component.
+      Every kill drops <b>Essence</b> and runes (mostly your element), and sometimes a rolled component; bosses always drop one.
       If it's destroyed, it keeps only half of what it found and each installed part has a 30% chance to be lost.
       <b>Each tier is a big step up</b>: dive together, since every extra machine gives the whole team <b>+15% damage</b> (Formation) and enemies grow slower than your crew does.</p>
       <div class="row tiers">${Array.from({ length: t }, (_, i) => `<button data-act="tier" data-tier="${i + 1}" class="small ${i + 1 === selectedTier ? 'on-tier' : 'ghost'}">Tier ${i + 1}</button>`).join('')}
@@ -483,7 +465,7 @@ function renderRift() {
       <p class="dim small">Tiers unlock when any crew machine reaches: ${S.tiers.ladder.map((l) => `Tier ${l.tier} at <b>${fmt(l.req)}</b>`).join(' · ')}.
         Your machine: <b class="gold">${fmt(Y.machine ? Engine.stats(Y.machine).resonance : 0)}</b>. Higher tiers: tougher enemies, better runes and components.</p>`}
     <div class="row"><label class="dim">Come home at <select id="recallSel" data-value="${Y.recallPct}">${[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7].map((v) => `<option value="${v}" ${Math.abs(v - Y.recallPct) < 0.01 ? 'selected' : ''}>${Math.round(v * 100)}% HP</option>`).join('')}</select></label></div>
-    <button class="big" data-act="dive" ${!Y.machine || S.dust < cost ? 'disabled' : ''}>${D ? `Join the Tier ${D.tier} dive` : `Send your machine into Tier ${tier}`} (${fmt(cost)} ✧)</button>`);
+    <button class="big" data-act="dive" ${!Y.machine ? 'disabled' : ''}>${D ? `Join the Tier ${D.tier} dive` : `Send your machine into Tier ${tier}`}</button>`);
   bottom('');
 }
 
