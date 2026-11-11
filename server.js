@@ -35,12 +35,11 @@ function loadRoom(id) {
       const state = game.normalize((await store.load(id)) || game.newRoom(id));
       const now = Date.now();
       const away = now - state.lastTick;
-      const before = { dust: state.dust, revealed: state.puzzle.revealed };
+      const before = state.dust;
       game.tick(state, now); // offline catch-up
       if (away > 60 * 1000) {
-        const gained = Math.round(state.dust - before.dust);
-        const charted = state.puzzle.revealed - before.revealed;
-        state.feed.push({ t: now, text: `While everyone was away (${fmtDuration(away)}): +${gained.toLocaleString()} stardust${charted > 0 ? `, ${charted} star(s) charted` : ''}.` });
+        const gained = Math.round(state.dust - before);
+        state.feed.push({ t: now, text: `While everyone was away (${fmtDuration(away)}): +${gained.toLocaleString()} stardust.` });
       }
       const r = { state, clients: new Map(), dirty: true };
       rooms.set(id, r);
@@ -113,7 +112,7 @@ wss.on('connection', (ws) => {
     room.dirty = true;
     // clicks are frequent; let the regular tick broadcast them
     // Most actions update everyone right away; rapid clicks are batched into one update per ~80ms.
-    if (msg.type === 'click' || msg.type === 'hit' || msg.type === 'notes') soonBroadcast(room);
+    if (msg.type === 'click' || msg.type === 'hit') soonBroadcast(room);
     else broadcast(room);
   });
   ws.on('close', () => {

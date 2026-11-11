@@ -9,7 +9,8 @@
 <body>
   <div id="join" class="join">
     <h1>✦ Starwright ✦</h1>
-    <p>A shared observatory for you and your friends. It keeps running while you're gone.</p>
+    <p>A shared observatory for you and your friends. It keeps making stardust while you're gone.
+      Spend it to open the Rift and fight for treasure together.</p>
     <input id="name" placeholder="Your name" maxlength="20">
     <input id="room" placeholder="Crew code (share this with friends)" maxlength="32">
     <button id="go">Enter the observatory</button>
@@ -17,76 +18,37 @@
 
   <div id="game" class="hidden">
     <header>
-      <div><b id="dust">0</b> stardust <span class="dim">(<span id="dps">0</span>/s<span id="routed"></span>)</span></div>
-      <div>Crew <b>Lv <span id="crewlvl">1</span></b></div>
-      <div><b id="shards">0</b> Starshards</div>
-      <div>Multiplier <b id="mult">×1</b></div>
+      <div><b id="dust">0</b> stardust <span class="dim">(<span id="dps">0</span>/s)</span></div>
+      <div id="reshead"></div>
       <div>Harmony <b id="harmony">×1</b></div>
       <div class="dim" id="roomlabel"></div>
     </header>
 
     <main>
       <section class="col">
-        <div id="crew" class="crewbox"></div>
         <h2>Observatory</h2>
         <button id="polish" class="big">✧ Polish the lens ✧<br><small id="clickval"></small></button>
         <p class="hint">Click together: everyone clicking within 1.5s multiplies <i>all</i> clicks (Harmony).</p>
-        <div id="upgrades"></div>
-        <h3>Starshard Perks</h3>
-        <p class="hint">Permanent. Earned in Rift Runs.</p>
-        <div id="perks"></div>
+        <div id="buildings"></div>
       </section>
 
       <section class="col wide">
-        <nav class="tabs">
-          <button data-tab="sky" class="active">Star Lock</button>
-          <button data-tab="workshop">Workshop</button>
-          <button data-tab="rift">Rift Run <span id="riftbadge"></span></button>
-        </nav>
-
-        <div id="tab-sky">
-          <h2 id="consttitle"></h2>
-          <p class="hint">Find the hidden stars. Every lens shows a different clue, and only one person can hold each lens.
-            Talk it out, mark the map together, then try the lock. The charting engine slowly fixes real stars in place (gold) even while you're away.</p>
-          <div id="board"></div>
-          <div class="row">
-            <span id="chartinfo" class="dim"></span>
-          </div>
-          <div class="row">
-            <button id="submit">Try the lock</button>
-            <button id="clear" class="ghost">Wipe map</button>
-            <span id="lockinfo" class="dim"></span>
-          </div>
-          <p class="hint">Click a cell: ? → ★ → · (empty) → ?</p>
-          <div id="quadclue"></div>
-          <h3>Relit constellations</h3>
-          <div id="solved" class="dim">None yet.</div>
-        </div>
-
-        <div id="tab-workshop" class="hidden">
-          <h2>Workshop</h2>
-          <p class="hint">Route part of the crew's stardust into machines. Whatever you route is taken out of production before it reaches the bank.
-            Sliders are shared, so anyone can change them. Talk it over!</p>
-          <div id="workshop"></div>
-        </div>
-
-        <div id="tab-rift" class="hidden">
-          <div id="rift"></div>
-          <div id="arena" class="hidden"><div id="arenaMsg"></div><div id="combo"></div></div>
-          <div id="riftBottom"></div>
+        <div id="rift"></div>
+        <div id="arena" class="hidden"><div id="arenaMsg"></div><div id="combo"></div></div>
+        <div id="riftBottom"></div>
+        <div id="relicsBox">
+          <h2>Relics</h2>
+          <p class="hint">Permanent upgrades, paid for with what you bring back from the Rift.</p>
+          <div id="relics"></div>
         </div>
       </section>
 
       <section class="col">
-        <h2>Lenses</h2>
-        <div id="lenses"></div>
         <h2>Crew</h2>
         <div id="players"></div>
         <h2>Log</h2>
         <div id="feed"></div>
         <form id="chatform"><input id="chat" placeholder="Say something…" maxlength="300"></form>
-        <h2>Shared notebook</h2>
-        <textarea id="notes" placeholder="Write down clues, plans, theories… everyone sees this."></textarea>
       </section>
     </main>
     <div id="toast"></div>
