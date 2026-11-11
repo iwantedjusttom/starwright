@@ -107,7 +107,7 @@ test('relics cost Rift loot and boost idle and Rift', () => {
 
 test('worlds from older versions keep stardust, buildings, shards and iron', () => {
   const old = { id: 'old', lastTick: 0, createdAt: 0, dust: 5000, totalDust: 9000, shards: 7, upgrades: { telescope: 4, dome: 2, cloth: 1, ink: 3 },
-    workshop: { iron: 3, aether: 99 }, players: { a: { name: 'Ann', lens: 'rows', contributed: 5 } }, feed: [], puzzle: {}, crewLevel: 5, bestFloor: 6 };
+    workshop: { iron: 3, aether: 99 }, perks: { echo: 2, hull: 1, keen: 3 }, gear: { blade: 1, ward: 1 }, players: { a: { name: 'Ann', lens: 'rows', contributed: 5 } }, feed: [], puzzle: {}, crewLevel: 5, bestFloor: 6 };
   const r = g.normalize(old);
   assert.strictEqual(r.dust, 5000);
   assert.strictEqual(r.buildings.telescope, 4);
@@ -115,6 +115,7 @@ test('worlds from older versions keep stardust, buildings, shards and iron', () 
   assert.strictEqual(r.cloth, 1);
   assert.deepStrictEqual(r.res, { shards: 7, iron: 3, pearls: 0 });
   assert.strictEqual(r.bestFloor, 6);
+  assert.deepStrictEqual([r.relics.echo, r.relics.blade, r.relics.ward], [2, 1, 2]);
   assert.strictEqual(r.players.a.lens, undefined);
   assert.strictEqual(r.puzzle, undefined);
   assert.strictEqual(g.normalize(r), r); // already current

@@ -104,6 +104,11 @@ function normalize(room) {
   });
   fresh.res.shards = Math.floor(room.shards || 0);
   fresh.res.iron = Math.floor(room.workshop?.iron || 0);
+  // Old perks and Rift Gear that have a Relic equivalent carry over.
+  fresh.relics.echo = room.perks?.echo || 0;
+  fresh.relics.blade = room.gear?.blade || 0;
+  fresh.relics.ward = (room.gear?.ward || 0) + (room.perks?.hull || 0);
+  fresh.relics.sight = Math.min(RELICS.sight.max, room.gear?.sight || 0);
   for (const p of Object.values(fresh.players)) { delete p.lens; delete p.attunedAt; }
   log(fresh, '🔧 The observatory was simplified: it\'s just stardust and the Rift now. Your stardust, buildings, shards and iron came along.', fresh.lastTick);
   return fresh;
