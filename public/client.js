@@ -225,6 +225,7 @@ $('storage').onclick = (e) => {
 $('pouchActions').onclick = (e) => {
   const b = e.target.closest('button'); if (!b) return;
   if (b.dataset.fuse) { const [el, rank] = b.dataset.fuse.split(':'); send({ type: 'fuseRunes', el, rank: +rank }); }
+  if (b.dataset.act === 'fuseAll') send({ type: 'fuseAll' });
   if (b.dataset.act === 'salvageRune') { send({ type: 'salvage', runeId: held.id }); held = null; }
   if (b.dataset.act === 'salvageI') { const ids = me().pouch.filter((r) => r.rank === 1 && r.el !== me().el).map((r) => r.id); if (ids.length && confirm(`Salvage ${ids.length} rank I rune(s) that aren't your element?`)) send({ type: 'salvage', runeIds: ids }); }
   if (b.dataset.give) { send({ type: 'give', runeId: held.id, to: b.dataset.give }); held = null; }
@@ -574,6 +575,7 @@ function renderMachine() {
   for (const r of Y.pouch) { const k = `${r.el}:${r.rank}`; rg[k] = (rg[k] || 0) + 1; }
   const fuses = Object.entries(rg).filter(([k, n]) => n >= 3 && +k.split(':')[1] < Engine.MAX_RANK)
     .map(([k]) => { const [el, rank] = k.split(':'); return `<button data-fuse="${k}" class="button small">Fuse 3× ${EL[el].icon} ${R[rank]} → ${R[+rank + 1]}</button>`; });
+  if (fuses.length) fuses.unshift(`<button data-act="fuseAll" class="button small primary" title="Fuse every set of 3 identical runes, all the way up the ranks">🔮 Fuse all to max</button>`);
   const others = S.players.filter((p) => p.ref !== Y.ref);
   const spareI = Y.pouch.filter((r) => r.rank === 1 && r.el !== Y.el);
   const heldRune = held?.kind === 'rune' && Y.pouch.find((r) => r.id === held.id);

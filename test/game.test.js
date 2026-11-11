@@ -321,3 +321,16 @@ test('random shapes fit and rotate; curses hurt; element combos change what a co
   const steamPump = Engine.stats({ w: 1, h: 2, items: [{ ...item(1, 'pump', 0, 0, 0, [rune('tide'), rune('ember')]) }] });
   assert.ok(steamPump.regen > 2, 'Steam adds repair');
 });
+
+test('fuse all cascades every element up as far as it can go', () => {
+  const r = setup();
+  g.act(r, 'a', { type: 'element', el: 'sun' }, solo, 0);
+  const p = r.players.a;
+  // 9 tide I → 3 tide II → 1 tide III; plus 2 leftover tide I. 4 moon I → 1 moon II + 1 moon I.
+  p.pouch = [...Array(11)].map(() => rune('tide')).concat([...Array(4)].map(() => rune('moon')));
+  assert.strictEqual(g.act(r, 'a', { type: 'fuseAll' }, solo, 0), null);
+  const count = (el, rank) => p.pouch.filter((q) => q.el === el && q.rank === rank).length;
+  assert.deepStrictEqual([count('tide', 1), count('tide', 2), count('tide', 3)], [2, 0, 1]);
+  assert.deepStrictEqual([count('moon', 1), count('moon', 2)], [1, 1]);
+  assert.match(g.act(r, 'a', { type: 'fuseAll' }, solo, 0), /Nothing to fuse/);
+});

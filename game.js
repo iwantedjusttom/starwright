@@ -388,6 +388,25 @@ function act(room, pid, msg, online, now = Date.now()) {
       log(room, `🔮 ${me.name} fused three runes into ${runeName(made)}.`, now);
       return null;
     }
+    case 'fuseAll': { // fuse every set of 3 identical runes, cascading up through the ranks
+      let fused = 0;
+      const top = {};
+      for (const el of ELEMENT_KEYS) {
+        for (let rank = 1; rank < MAX_RANK; rank++) {
+          let same = me.pouch.filter((r) => r.el === el && r.rank === rank);
+          while (same.length >= 3) {
+            for (const r of same.splice(0, 3)) me.pouch.splice(me.pouch.indexOf(r), 1);
+            me.pouch.push(newRune(room, el, rank + 1));
+            fused++;
+            top[el] = Math.max(top[el] || 0, rank + 1);
+          }
+        }
+      }
+      if (!fused) return 'Nothing to fuse: you need 3 identical runes.';
+      const best = Object.entries(top).map(([el, rank]) => runeName({ el, rank })).join(', ');
+      log(room, `🔮 ${me.name} fused ${fused} set${fused === 1 ? '' : 's'} of runes (best: ${best}).`, now);
+      return null;
+    }
     case 'salvage': { // break runes or a stored component down into Essence
       if (msg.itemId) {
         const it = me.storage.find((o) => o.id === msg.itemId);
