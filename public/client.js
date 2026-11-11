@@ -9,6 +9,7 @@ const fmt = (n) => {
 };
 const fmt1 = (n) => (n >= 100 ? fmt(n) : (Math.round(n * 10) / 10).toString());
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const pad2 = (n) => String(n).padStart(2, '0');
 
 // Update a panel in place: only changed text/attributes are touched, so buttons under the
 // cursor survive re-renders (replacing them mid-click would swallow clicks).
@@ -42,7 +43,7 @@ function pop(e, text, cls = '') {
   setTimeout(() => d.remove(), 700);
 }
 
-let ws, S = null, selectedTier = null;
+let ws, S = null, selectedTier = null, joined = false;
 const diveEndSeen = {};
 // What you're holding: { kind: 'rune', id } or { kind: 'comp', id, rot }. focusId: the installed component being inspected.
 let held = null, focusId = null, hoverCell = null;
@@ -57,27 +58,36 @@ function connect() {
   if (!name || !room) return toast('Pick a name and a crew code.');
   localStorage.name = name; localStorage.room = room;
   history.replaceState(null, '', `?crew=${encodeURIComponent(room)}`);
+  if (ws) { ws.onclose = null; ws.close(); }
   ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host);
-  ws.onopen = () => send({ type: 'join', room, name, pid });
+  ws.onopen = () => { send({ type: 'join', room, name, pid }); $('conn-dot').classList.remove('off'); };
   ws.onmessage = (e) => {
     const m = JSON.parse(e.data);
     if (m.type === 'error') toast(m.text);
     if (m.type === 'state') { S = m.state; render(); }
   };
-  ws.onclose = () => { toast('Disconnected. Reconnecting…'); setTimeout(connect, 2000); };
-  $('join').classList.add('hidden'); $('game').classList.remove('hidden');
-  $('roomlabel').textContent = `Crew: ${room}`;
+  ws.onclose = () => { $('conn-dot').classList.add('off'); toast('Disconnected. Reconnecting…'); setTimeout(connect, 2000); };
+  joined = true;
+  $('join').classList.add('hidden');
+  $('close-join').classList.remove('hidden');
+  $('roomlabel').textContent = room.toUpperCase();
 }
-$('go').onclick = connect;
-$('room').onkeydown = (e) => { if (e.key === 'Enter') connect(); };
+$('join-form').onsubmit = (e) => { e.preventDefault(); connect(); };
+$('open-join').onclick = () => { $('join').classList.remove('hidden'); $('name').focus(); };
+$('close-join').onclick = () => { if (joined) $('join').classList.add('hidden'); };
+$('copy-crew').onclick = async () => {
+  const link = location.href;
+  try { await navigator.clipboard.writeText(link); toast('Invite link copied. Send it to your crew!'); } catch { toast(`Invite link: ${link}`); }
+};
 if (localStorage.name && $('room').value) connect();
 
 let toastTimer;
-function toast(t) { $('toast').textContent = t; $('toast').classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').classList.remove('show'), 2500); }
+function toast(t) { $('toast').textContent = t; $('toast').classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').classList.remove('show'), 2800); }
 
 // ---------------------------------------------------------------- shared helpers
-const EL = Engine.ELEMENTS, COMP = Engine.COMPONENTS;
+const EL = Engine.ELEMENTS, COMP = Engine.COMPONENTS, RAR = Engine.RARITIES;
 const R = Engine.ROMAN;
+const GLYPH = { lance: '✧', coil: '♨', lash: '◉', shield: '☾', plate: '▣', pump: '≈', capacitor: '◇', core: '✺', harvester: '✣' };
 // Art: rune images are used when present in public/assets/runes/ (falls back to the element symbol otherwise).
 const ART = { rune: {} };
 for (const el of Engine.ELEMENT_KEYS) {
@@ -85,49 +95,37 @@ for (const el of Engine.ELEMENT_KEYS) {
   im.onload = () => { ART.rune[el] = im.src; if (S) render(); };
   im.src = `assets/runes/${el}.png`;
 }
-const runeArt = (r) => (ART.rune[r.el] ? `<img class="runeimg rank-${Math.min(r.rank, 8)}" src="${ART.rune[r.el]}" alt="${EL[r.el].name}" draggable="false">` : EL[r.el].icon);
-const runeChip = (r, extra = '') => `<span class="rune el-${r.el} ${extra} ${ART.rune[r.el] ? 'hasart' : ''}" data-rune="${r.id}" title="${EL[r.el].name} ${R[r.rank]}">${runeArt(r)}<sub>${R[r.rank]}</sub></span>`;
-const RAR = Engine.RARITIES;
-const compTitle = (it) => `<span style="color:${RAR[it.rarity || 'common'].color}">${esc(Engine.itemName(it))}</span>${it.lvl > 1 ? ` <span class="gold">+${it.lvl - 1}</span>` : ''}`;
-const modList = (it) => (it.mods || []).map((m) => `<li class="${Engine.MODS[m.k].bad ? 'curse' : 'buff'}">${Engine.MODS[m.k].bad ? '▼' : '▲'} ${esc(Engine.MODS[m.k].text(m.v))}</li>`).join('');
-// "Takes: ☀ Sun · ♨ Ember" — what runes a component wants, as coloured labels
-const takes = (it) => `<span class="takes">Takes ${Engine.socketsOf(it).map((sk) => `<span class="elpill el-${sk.el}">${EL[sk.el].icon} ${EL[sk.el].name}</span>`).join('')}</span>`;
+const runeImg = (r, cls) => (ART.rune[r.el] ? `<img class="${cls} rank-${Math.min(r.rank, 8)}" src="${ART.rune[r.el]}" alt="${EL[r.el].name} rune" draggable="false">` : `<span class="${cls} sym" style="color:${EL[r.el].color}">${EL[r.el].icon}</span>`);
+const rarColor = (it) => RAR[it.rarity || 'common'].color;
+const elBadge = (el, extra = '') => `<span class="element-badge" style="--element-color:${EL[el].color}">${EL[el].icon} ${EL[el].name}${extra}</span>`;
+const modLines = (it) => (it.mods || []).map((m) => `<div class="inspect-buffs ${Engine.MODS[m.k].bad ? 'bad' : ''}">${Engine.MODS[m.k].bad ? '▼' : '▲'} ${esc(Engine.MODS[m.k].text(m.v))}</div>`).join('');
 // Element combos: which ones are on right now, and which this component's sockets could make
 function comboLine(it) {
   const active = Engine.combosOf(it), possible = Engine.possibleCombos(it).filter((k) => !active.includes(k));
   const C = Engine.COMBOS;
   const label = (k) => C[k].els ? C[k].els.map((e) => EL[e].icon).join('+') : 'same element';
-  return (active.length ? `<div class="combo on">${active.map((k) => `✦ <b>${C[k].name}</b>: ${esc(C[k].text)}`).join('<br>')}</div>` : '') +
-    (possible.length ? `<div class="combo">${possible.map((k) => `◇ ${C[k].name} (${label(k)}): ${esc(C[k].text)}`).join('<br>')}</div>` : '');
+  return active.map((k) => `<div class="combo on">✦ <b>${C[k].name}</b>: ${esc(C[k].text)}</div>`).join('') +
+    possible.map((k) => `<div class="combo">◇ ${C[k].name} (${label(k)}): ${esc(C[k].text)}</div>`).join('');
 }
-const costLabel = (c) => `${fmt(c.essence)} ✦`;
+const costLabel = (c) => `${fmt(c.essence)} ✧`;
 const canAfford = (c) => (S.you.essence || 0) >= c.essence;
 const me = () => S.you;
 const allItems = () => [...(me().machine?.items || []), ...me().storage];
 const findItem = (id) => allItems().find((it) => it.id === id);
-function miniShape(type, rot = 0, it = null) {
-  const cells = Engine.cellsFor(it || type, rot), w = Math.max(...cells.map((c) => c[0])) + 1, h = Math.max(...cells.map((c) => c[1])) + 1;
-  const socketAt = new Map((it ? Engine.socketsOf(it) : COMP[type].sockets).map((s) => [s.c, s.el]));
-  let out = `<span class="mini" style="grid-template-columns:repeat(${w},16px)">`;
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-    const i = cells.findIndex(([cx, cy]) => cx === x && cy === y);
-    out += i < 0 ? '<i></i>' : `<i class="on" style="background:${COMP[type].color}">${socketAt.has(i) ? `<b class="el-${socketAt.get(i)}">${EL[socketAt.get(i)].icon}</b>` : ''}</i>`;
-  }
-  return out + '</span>';
-}
+const sqCount = (it) => Engine.shapeOf(it).length;
 
-// A large drawing of a component's shape: every square, with socket squares coloured and named by the element they want.
-function bigShape(it, rot = 0) {
+// A drawing of a component's shape: socket squares show the element they want (or the rune in them).
+function shapeArt(it, rot = 0, px = 20) {
   const cells = Engine.cellsFor(it, rot), w = Math.max(...cells.map((c) => c[0])) + 1, h = Math.max(...cells.map((c) => c[1])) + 1;
   const socks = Engine.socketsOf(it), sockAt = new Map(socks.map((s, i) => [s.c, i]));
-  let out = `<div class="bigshape" style="grid-template-columns:repeat(${w},46px)">`;
+  let out = `<div class="shape-art" style="grid-template-columns:repeat(${w},${px}px);--px:${px}px;--component-color:${COMP[it.type].color}">`;
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
     const ci = cells.findIndex(([cx, cy]) => cx === x && cy === y);
     if (ci < 0) { out += '<i></i>'; continue; }
     const si = sockAt.get(ci);
-    if (si === undefined) { out += `<i class="sq" style="--cc:${COMP[it.type].color}"></i>`; continue; }
+    if (si === undefined) { out += '<i class="sq"></i>'; continue; }
     const el = socks[si].el, r = it.runes?.[si];
-    out += `<i class="sq sk el-${el}" style="--cc:${COMP[it.type].color}"><b>${EL[el].icon}</b><span>${r ? `${EL[r.el].icon}${R[r.rank]}` : EL[el].name}</span></i>`;
+    out += `<i class="sq sk" style="--element-color:${EL[el].color}" title="${EL[el].name} socket">${r ? runeImg(r, 'sq-rune') : `<b>${EL[el].icon}</b>`}</i>`;
   }
   return out + '</div>';
 }
@@ -148,7 +146,7 @@ function neighbourRule(it) {
   if (tw) extra.push('<b>Twilight</b> (active): +20% to everything it touches');
   else if (twMaybe) extra.push('<b>Twilight</b> (if you socket Sun + Moon): +20% to everything it touches');
   const base = NEIGHBOUR_RULE[it.type] || (extra.length ? 'Its type doesn\'t affect neighbours, but:' : 'Doesn\'t affect its neighbours. Put it wherever it fits (it can still be boosted by others).');
-  return base + (extra.length ? `<ul class="mods">${extra.map((x) => `<li>${x}</li>`).join('')}</ul>` : '');
+  return base + (extra.length ? `<ul class="nb-list">${extra.map((x) => `<li>${x}</li>`).join('')}</ul>` : '');
 }
 const pct = (f) => `${f >= 1 ? '+' : '−'}${Math.round(Math.abs(f - 1) * 100)}%`;
 
@@ -213,7 +211,7 @@ function socketAt(x, y) {
 }
 
 // ---------------------------------------------------------------- input
-$('chatform').onsubmit = (e) => { e.preventDefault(); send({ type: 'chat', text: $('chat').value }); $('chat').value = ''; };
+$('chatform').onsubmit = (e) => { e.preventDefault(); const t = $('chat').value.trim(); if (t) send({ type: 'chat', text: t }); $('chat').value = ''; };
 $('elementPick').onclick = (e) => { const el = e.target.closest('[data-el]')?.dataset.el; if (el) send({ type: 'element', el }); };
 
 $('pouch').onclick = (e) => {
@@ -221,9 +219,6 @@ $('pouch').onclick = (e) => {
   held = held?.kind === 'rune' && held.id === id ? null : { kind: 'rune', id }; focusId = null; render();
 };
 $('storage').onclick = (e) => {
-  const b = e.target.closest('button');
-  if (b?.dataset.upgrade) { send({ type: 'upgrade', itemId: +b.dataset.upgrade }); return; }
-  if (b?.dataset.salvage) { if (confirm('Salvage this component into Essence? Any runes in it go back to your pouch.')) send({ type: 'salvage', itemId: +b.dataset.salvage }); return; }
   const id = +e.target.closest('[data-item]')?.dataset.item; if (!id) return;
   held = held?.kind === 'comp' && held.id === id ? null : { kind: 'comp', id, rot: 0 }; focusId = null; render();
 };
@@ -232,28 +227,32 @@ $('pouchActions').onclick = (e) => {
   if (b.dataset.fuse) { const [el, rank] = b.dataset.fuse.split(':'); send({ type: 'fuseRunes', el, rank: +rank }); }
   if (b.dataset.act === 'salvageRune') { send({ type: 'salvage', runeId: held.id }); held = null; }
   if (b.dataset.act === 'salvageI') { const ids = me().pouch.filter((r) => r.rank === 1 && r.el !== me().el).map((r) => r.id); if (ids.length && confirm(`Salvage ${ids.length} rank I rune(s) that aren't your element?`)) send({ type: 'salvage', runeIds: ids }); }
-  if (b.dataset.give) { send({ type: 'give', [held.kind === 'rune' ? 'runeId' : 'itemId']: held.id, to: b.dataset.give }); held = null; }
-  if (b.dataset.act === 'rotate') rotateHeld();
+  if (b.dataset.give) { send({ type: 'give', runeId: held.id, to: b.dataset.give }); held = null; }
   if (b.dataset.act === 'drop') { held = null; render(); }
 };
 $('expand').onclick = (e) => { const d = e.target.closest('button')?.dataset.expand; if (d) send({ type: 'expand', dir: d }); };
 $('focus').onclick = (e) => {
   const b = e.target.closest('button'); if (!b) return;
-  if (b.dataset.act === 'hrot') return rotateHeld();
-  if (b.dataset.act === 'hdrop') { held = null; return render(); }
+  const a = b.dataset.act;
+  if (a === 'hrot') return rotateHeld();
+  if (a === 'hdrop') { held = null; return render(); }
+  if (a === 'hupgrade') return send({ type: 'upgrade', itemId: held.id });
+  if (a === 'hsalvage') { if (confirm('Salvage this component into Essence? Any runes in it go back to your pouch.')) { send({ type: 'salvage', itemId: held.id }); held = null; } return; }
+  if (b.dataset.giveitem) { send({ type: 'give', itemId: held.id, to: b.dataset.giveitem }); held = null; return; }
   const it = findItem(focusId); if (!it) return;
-  if (b.dataset.act === 'store') { send({ type: 'store', itemId: it.id }); focusId = null; }
-  if (b.dataset.act === 'upgrade') send({ type: 'upgrade', itemId: it.id });
-  if (b.dataset.act === 'move') { held = { kind: 'comp', id: it.id, rot: it.rot }; focusId = null; render(); }
-  if (b.dataset.act === 'rot') rotateInstalled(it);
+  if (a === 'store') { send({ type: 'store', itemId: it.id }); focusId = null; }
+  if (a === 'upgrade') send({ type: 'upgrade', itemId: it.id });
+  if (a === 'move') { held = { kind: 'comp', id: it.id, rot: it.rot }; focusId = null; render(); }
+  if (a === 'rot') rotateInstalled(it);
   if (b.dataset.unsocket) send({ type: 'unsocket', itemId: it.id, s: +b.dataset.unsocket });
-  if (b.dataset.act === 'close') { focusId = null; render(); }
+  if (a === 'close') { focusId = null; render(); }
 };
 function rotateHeld() { if (held?.kind === 'comp') { held.rot = (held.rot + 1) % 4; render(); } }
 document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && joined && !$('join').classList.contains('hidden')) { $('join').classList.add('hidden'); return; }
   if (e.target.tagName === 'INPUT') return;
   if (e.key === 'r' || e.key === 'R') rotateHeld();
-  if (e.key === 'Escape') { held = null; focusId = null; render(); }
+  if (e.key === 'Escape') { held = null; focusId = null; if (joined) $('join').classList.add('hidden'); render(); }
 });
 $('machineGrid').addEventListener('pointerover', (e) => {
   const c = e.target.closest('[data-x]'); hoverCell = c ? [+c.dataset.x, +c.dataset.y] : null; renderMachine();
@@ -305,7 +304,7 @@ function setArena(mode, msg, cfg) {
 }
 function spawnLoop() {
   if (arenaMode !== 'fight') return;
-  if (targets.filter((t) => !t.link).length < arenaCfg.max) spawnTarget();
+  if (targets.filter((t) => !t.link && !t.block).length < arenaCfg.max) spawnTarget();
   spawnTimer = setTimeout(spawnLoop, arenaCfg.spawnMs * (0.7 + Math.random() * 0.6));
 }
 // Block targets: a red shield appears on the screen of whoever the enemy is about to hit. Click it in time.
@@ -333,14 +332,14 @@ function spawnTarget(opts = {}) {
   const r = Math.round(arenaCfg.radius * (link ? 1.25 : block ? 1.4 : 1)), w = arena.clientWidth, h = arena.clientHeight;
   if (w < 4 * r || h < 4 * r) return;
   let x, y, tries = 0;
-  do { x = r + Math.random() * (w - 2 * r); y = r + Math.random() * (h - 2 * r); }
+  const m = 14; // keep targets (and their shrinking timer ring) clear of the arena's edges
+  do { x = r + m + Math.random() * (w - 2 * r - 2 * m); y = r + m + 16 + Math.random() * (h - 2 * r - 2 * m - 16); }
   while (tries++ < 12 && targets.some((t) => Math.hypot(t.x - x, t.y - y) < t.r + r + 6));
   const life = link ? link.ttl : block ? block.ttl : arenaCfg.lifeMs;
   const el = document.createElement('div');
   el.className = 'target' + (link ? ' linked' : block ? ' block' : '');
   el.style.cssText = `left:${x - r}px;top:${y - r}px;width:${2 * r}px;height:${2 * r}px;--life:${life}ms` + (link ? `;--hue:${link.hue}` : '');
-  if (link) el.innerHTML = `<span>⚡ ${esc(link.partner)}</span>`;
-  if (block) el.innerHTML = `<em>🛡</em><span>BLOCK! (${block.atk} dmg)</span>`;
+  el.innerHTML = link ? `<em>ϟ</em><span>⚡ ${esc(link.partner)}</span>` : block ? `<em>⬡</em><span>BLOCK! (${block.atk} dmg)</span>` : '<em>✦</em>';
   arena.appendChild(el);
   const t = { x, y, r, el, link, block };
   t.timer = setTimeout(() => {
@@ -353,7 +352,7 @@ function spawnTarget(opts = {}) {
 }
 function showCombo(state) {
   const el = $('combo');
-  el.textContent = combo > 1 ? `Combo ×${combo}` : '';
+  el.textContent = combo > 1 ? `${combo} × COMBO` : '';
   el.classList.toggle('lost', state === 'lost');
 }
 arena.addEventListener('pointerdown', (e) => {
@@ -380,37 +379,55 @@ function render() {
   if (!S) return;
   $('essencehead').textContent = fmt(S.you.essence || 0);
   $('tierhead').textContent = S.tiers.max;
-  $('reshead').textContent = fmt(S.totalResonance);
+  $('reshead').textContent = fmt(S.you.machine ? Engine.stats(S.you.machine).resonance : 0);
 
   renderRift();
   renderMachine();
+  renderCrew();
   syncLinks();
+}
 
-  setHTML($('players'), S.players.map((p) => `<div><span class="${p.online ? 'on' : 'off'}">●</span> ${p.el ? `<span class="elc el-${p.el}">${EL[p.el].icon}</span> ` : ''}${esc(p.name)}
-    <span class="dim">· Resonance ${fmt(p.resonance)}${p.status ? ` · <span class="warn">${p.status}</span>` : ''}</span></div>`).join(''));
+function renderCrew() {
+  const online = S.players.filter((p) => p.online).length;
+  $('online-count').textContent = `${online} / ${S.players.length}`;
+  $('crew-total').textContent = pad2(S.players.length);
+  $('crew-resonance').textContent = fmt(S.totalResonance);
+  const inRift = S.dive ? S.dive.units.filter((u) => u.status === 'fighting').length : 0;
+  $('crew-boost').textContent = inRift > 1 ? `×${(1 + 0.15 * (inRift - 1)).toFixed(2)} formation` : '';
+  $('crew-boost').classList.toggle('hidden', inRift < 2);
+  setHTML($('players'), S.players.map((p) => {
+    const status = p.status ? 'In the Rift' : p.online ? (p.ref === S.you.ref ? 'In the workshop (you)' : 'In the workshop') : 'Away';
+    return `<div class="crew-member ${p.online ? 'online' : 'offline'}"><span class="crew-avatar">${esc((p.name[0] || '?').toUpperCase())}</span>
+      <span class="crew-member-text"><strong>${esc(p.name)}</strong><small>${status}</small></span>
+      <span class="crew-element" style="color:${p.el ? EL[p.el].color : '#8a8fa8'}">${p.el ? EL[p.el].icon : '·'}<span>${fmt(p.resonance)}</span></span></div>`;
+  }).join(''));
 
   const feed = $('feed');
   const atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 30;
-  setHTML(feed, S.feed.map((f) => `<div><span class="dim">${new Date(f.t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span> ${esc(f.text)}</div>`).join(''));
+  const tone = (t) => (/💥|fell|destroyed|lost/.test(t) ? 'bad' : /🎉|🌀|⚡|🏳|⚔|♻|🎁|unlocked/.test(t) ? 'good' : '');
+  setHTML(feed, S.feed.map((f) => `<div class="log-entry ${tone(f.text)}"><time class="log-time">${new Date(f.t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}</time><span class="log-message">${esc(f.text)}</span></div>`).join(''));
   if (atBottom) feed.scrollTop = feed.scrollHeight;
 }
 
-function statLine(label, now, after, f = fmt1) {
+function statRow(icon, label, now, after, f = fmt1) {
   const d = after == null ? 0 : after - now;
-  return `<div class="stat"><span>${label}</span><b>${f(now)}</b>${Math.abs(d) > 1e-6 ? `<i class="${d > 0 ? 'up' : 'down'}">${d > 0 ? '+' : ''}${f(d)}</i>` : ''}</div>`;
+  return `<div class="machine-stat"><span class="stat-name"><span class="stat-icon">${icon}</span> ${label}</span><span class="stat-measure">${f(now)}${Math.abs(d) > 1e-6 ? ` <i class="delta ${d > 0 ? 'up' : 'down'}">${d > 0 ? '+' : ''}${f(d)}</i>` : ''}</span></div>`;
 }
 
 function renderMachine() {
   const Y = me(), m = Y.machine;
-  setHTML($('elementPick'), Y.el ? '' : `<div class="pick"><b>Choose your element to get your machine.</b> Most runes you find will match it,
-    so you'll want to trade with your crew for the others.
-    <div class="els">${Engine.ELEMENT_KEYS.map((k) => `<button data-el="${k}" class="el-${k}"><b>${EL[k].icon} ${EL[k].name}</b></button>`).join('')}</div></div>`);
+  setHTML($('elementPick'), Y.el ? '' : `<div class="element-pick"><div class="label-row"><span>CHOOSE YOUR ELEMENT</span><small>to build your first machine</small></div>
+    <p class="panel-description">Most runes you find will match your element, so your crew will need each other's runes to build great machines.</p>
+    <div class="element-choices">${Engine.ELEMENT_KEYS.map((k) => `<button class="element-choice" data-el="${k}" style="--element-color:${EL[k].color}">${ART.rune[k] ? `<img src="${ART.rune[k]}" alt="">` : `<span class="sym">${EL[k].icon}</span>`}<b>${EL[k].name}</b></button>`).join('')}</div></div>`);
   $('machineWrap').classList.toggle('hidden', !m);
   if (!m) return;
   if (held && !findItem(held.id) && !Y.pouch.some((r) => r.id === held.id)) held = null;
   if (focusId && !m.items.some((it) => it.id === focusId)) focusId = null;
   const locked = Y.diving;
   $('machineBox').classList.toggle('locked', locked);
+  $('core-label').innerHTML = locked ? '<span class="pulse-dot"></span> IN THE RIFT' : '<span class="pulse-dot"></span> CORE ONLINE';
+  $('machine-sub').textContent = Y.el ? `/ ${EL[Y.el].name.toUpperCase()}-BOUND` : '';
+  $('grid-dimensions').textContent = `${m.w} × ${m.h} CELLS`;
 
   // grid squares → item ids
   const occ = Array(m.w * m.h).fill(null), cellInfo = {};
@@ -441,91 +458,97 @@ function renderMachine() {
     for (const id of fl.out) {
       const f = prod(stats.links[id].in.filter((l) => l.from === focusId));
       const got = { text: f >= 1 ? `gets ${pct(f)}` : `loses ${pct(f)}`, cls: f >= 1 ? 'get' : 'drain' };
-      // e.g. two coils boosting each other
       badges[id] = !badges[id] ? got : badges[id].text.split(' ')[1] === got.text.split(' ')[1]
         ? { text: `↔ ${got.text.split(' ')[1]} both ways`, cls: 'both' } : { text: `${badges[id].text} · ${got.text}`, cls: 'both' };
     }
     if (fl.dead && fl.booster) badges[focusId] = { text: 'off: no runes', cls: 'drain' };
   }
-  let html = '';
+  let html = '', bridges = '';
   for (let y = 0; y < m.h; y++) for (let x = 0; x < m.w; x++) {
     const k = y * m.w + x, info = cellInfo[k];
-    const cls = ['cell'];
+    const cls = ['grid-slot'];
     let inner = '', style = '';
     if (info) {
       const { it, ci } = info, def = COMP[it.type];
-      style = `--cc:${def.color}`;
-      cls.push('filled');
-      if (it.id === focusId) cls.push('focused');
+      style = `--component-color:${def.color}`;
+      cls.push('occupied');
+      if (it.id === focusId) cls.push('selected');
       const same = (dx, dy) => { const nx = x + dx, ny = y + dy; return nx >= 0 && ny >= 0 && nx < m.w && ny < m.h && occ[ny * m.w + nx] === it.id; };
-      if (!same(0, -1)) cls.push('bt'); if (!same(0, 1)) cls.push('bb'); if (!same(-1, 0)) cls.push('bl'); if (!same(1, 0)) cls.push('br');
+      if (same(1, 0)) bridges += `<i class="bridge v" style="--x:${x};--y:${y};--c:${def.color}"></i>`;
+      if (same(0, 1)) bridges += `<i class="bridge h" style="--x:${x};--y:${y};--c:${def.color}"></i>`;
       const socks = Engine.socketsOf(it);
       const s = socks.findIndex((sk) => sk.c === ci);
       if (s >= 0) {
         const r = it.runes[s], want = socks[s].el;
-        cls.push('sockcell', 'el-' + want);
-        inner = r ? `<span class="sock full el-${r.el} ${r.el === want ? '' : 'mismatch'}" title="${EL[r.el].name} ${R[r.rank]} in a ${EL[want].name} socket">${runeArt(r)}<sub>${R[r.rank]}</sub>${r.el === want ? '' : `<span class="want el-${want}">wants ${EL[want].name}</span>`}</span>`
-          : `<span class="sock el-${want}" title="wants a ${EL[want].name} rune">${EL[want].icon}<span class="want">${EL[want].name}</span></span>`;
-      }
+        cls.push('has-socket');
+        style += `;--element-color:${EL[want].color}`;
+        inner = r ? `${runeImg(r, 'tile-rune')}<span class="rank-tag" style="--element-color:${EL[r.el].color}">${R[r.rank]}</span>${r.el === want ? '' : `<span class="want">wants ${EL[want].name}</span>`}`
+          : `<span class="empty-socket" style="--element-color:${EL[want].color}" title="Empty ${EL[want].name} socket">${EL[want].icon}</span><span class="want">${EL[want].name}</span>`;
+        if (r && r.el !== want) cls.push('mismatch');
+      } else inner = `<span class="tile-glyph" aria-hidden="true">${GLYPH[it.type] || '✦'}</span>`;
+      if (ci === 0) inner += `<small class="tile-number" title="power">${fmt1(10 * (stats.power[it.id] || 0))}</small>`;
       if (badges[it.id] && ci === handleIndex(it)) inner += `<span class="badge ${badges[it.id].cls}">${badges[it.id].text}</span>`;
-      if (ci === 0) inner += `<span class="cname" style="color:${RAR[it.rarity || 'common'].color}">${esc(def.name.split(' ').pop())}${it.lvl > 1 ? ' +' + (it.lvl - 1) : ''}</span><span class="cpow">${fmt1(10 * (stats.power[it.id] || 0))}</span>`;
     }
-    if (ghost.has(`${x},${y}`)) cls.push(ghostOk ? 'ghost-ok' : 'ghost-bad');
+    if (ghost.has(`${x},${y}`)) cls.push(ghostOk ? 'possible' : 'invalid');
     if (held?.kind === 'rune' && info && Engine.socketsOf(info.it).some((sk) => sk.c === info.ci)) cls.push('droppable');
     html += `<div class="${cls.join(' ')}" style="${style}" data-x="${x}" data-y="${y}">${inner}</div>`;
   }
-  $('machineGrid').style.gridTemplateColumns = `repeat(${m.w}, 52px)`;
-  setHTML($('machineGrid'), html);
-  setHTML($('expand'), locked ? '' : `<button class="small ghost" data-expand="w" ${m.w >= Y.maxW || Y.essence < Y.expandCost ? 'disabled' : ''}>+ column</button>
-    <button class="small ghost" data-expand="h" ${m.h >= Y.maxH || Y.essence < Y.expandCost ? 'disabled' : ''}>+ row</button>
-    <span class="dim">${fmt(Y.expandCost)} ✦</span>`);
+  $('machineGrid').style.gridTemplateColumns = `repeat(${m.w}, var(--slot))`;
+  setHTML($('machineGrid'), html + bridges);
+  setHTML($('expand'), locked ? '' : `<button class="button small" data-expand="w" ${m.w >= Y.maxW || Y.essence < Y.expandCost ? 'disabled' : ''}>＋ Add column</button>
+    <button class="button small" data-expand="h" ${m.h >= Y.maxH || Y.essence < Y.expandCost ? 'disabled' : ''}>＋ Add row</button>
+    <span class="dim-label">${m.w >= Y.maxW && m.h >= Y.maxH ? 'MAX SIZE' : `${fmt(Y.expandCost)} ✧`}</span>`);
 
-  // stats with a live preview of whatever you're about to do
+  // readout, with a live preview of whatever you're about to do
   const trial = trialMachine();
   const after = trial && (trial.ok || Engine.fits(trial.m)) ? Engine.stats(trial.m) : null;
-  setHTML($('stats'), `<div class="statbox">${statLine('Damage/s', stats.dmg, after?.dmg)}${statLine('HP', stats.hp, after?.hp)}
-    ${statLine('Armor', stats.armor, after?.armor)}${statLine('Repair/s', stats.regen, after?.regen)}
-    ${statLine('Extra runes', stats.loot * 100, after && after.loot * 100, (v) => Math.round(v) + '%')}
-    ${statLine('Resonance', stats.resonance, after?.resonance, fmt)}
-    <div class="dim tiny">Tier ${S.tiers.max + 1} unlocks at ${fmt(S.tiers.nextReq)} (${fmt(Math.max(0, S.tiers.nextReq - stats.resonance))} to go)</div></div>`);
+  setHTML($('stats'), statRow('⚔', 'Damage / s', stats.dmg, after?.dmg) + statRow('♡', 'Hull HP', stats.hp, after?.hp)
+    + statRow('⬡', 'Armor', stats.armor, after?.armor) + statRow('✚', 'Repair / s', stats.regen, after?.regen)
+    + statRow('✧', 'Extra Runes', stats.loot * 100, after && after.loot * 100, (v) => Math.round(v) + '%')
+    + statRow('⌁', 'Resonance', stats.resonance, after?.resonance, fmt));
+  $('machine-power').textContent = fmt(stats.resonance);
+  setHTML($('tier-note'), `Tier ${S.tiers.max + 1} unlocks at <b>${fmt(S.tiers.nextReq)}</b> <span>(${fmt(Math.max(0, S.tiers.nextReq - stats.resonance))} to go)</span>`);
 
-  // inspecting an installed component: what it takes, and exactly how it works with its neighbours
+  // inspection: an installed component (how it works with its neighbours), or the component you're holding
   const f = focusId && m.items.find((it) => it.id === focusId);
   const held2 = held?.kind === 'comp' && findItem(held.id);
   const nameOf = (id) => { const o = m.items.find((x) => x.id === id); return o ? esc(Engine.itemName(o)) : '?'; };
-  let panel = '';
+  const head = (it, where, rot) => `<div class="inspect-art">${shapeArt(it, rot, sqCount(it) > 4 ? 16 : 20)}<span class="art-corner">LVL ${it.lvl}</span></div>
+    <div class="inspect-details"><div class="rarity-text" style="color:${rarColor(it)}">${RAR[it.rarity || 'common'].name.toUpperCase()} COMPONENT · ${where}</div>
+    <div class="inspect-name" style="color:${rarColor(it)}">${esc(Engine.itemName(it))}${it.lvl > 1 ? ` <span class="lvl-plus">+${it.lvl - 1}</span>` : ''}</div>
+    <div class="element-badges"><span class="takes-label">TAKES</span>${Engine.socketsOf(it).map((sk) => elBadge(sk.el)).join('')}</div>
+    <p class="inspect-description">${esc(COMP[it.type].desc)} ${sqCount(it)} square${sqCount(it) === 1 ? '' : 's'}.</p>`;
+  let panel;
   if (f && !locked) {
     const L = stats.links[f.id];
     const own = 10 * (stats.base[f.id] || 0), total = 10 * (stats.power[f.id] || 0);
-    // Power, in one sentence: what it has on its own, then each thing multiplying it.
     const parts = L.in.map((l) => `×${(Math.round(l.f * 100) / 100)} ${l.from === null ? `from ${esc(l.why)}` : `because it touches the ${nameOf(l.from)}`}`);
     const powerLine = L.dead ? '<span class="warn">Power 0: its sockets are empty, so it does nothing yet. Put a rune in it.</span>'
       : `Power <b class="gold">${fmt1(total)}</b>: ${fmt1(own)} from its runes and level${parts.length ? ', ' + parts.join(', ') : ''}.`;
-    const isBooster = L.booster;
-    const nowLine = !isBooster && !L.out.length ? ''
-      : L.dead ? '<div class="nb warn">Right now: boosting nothing, because its sockets are empty.</div>'
-        : L.out.length ? `<div class="nb">Right now it's boosting: <b>${L.out.map(nameOf).join(', ')}</b>.</div>`
-          : `<div class="nb warn">Right now: boosting nothing${f.type === 'capacitor' ? ' (it only helps weapons, and none touch it)' : ' (nothing it can help is touching it)'}.</div>`;
-    panel = `<div class="focusbox" style="border-color:${RAR[f.rarity || 'common'].color}">
-      <div class="fhead">${bigShape(f, f.rot)}<div><b>${compTitle(f)}</b> <span class="dim">· ${RAR[f.rarity || 'common'].name}</span><br>
-      <small>${esc(COMP[f.type].desc)}</small>${takes(f)}</div></div>
-      <div class="nb">${powerLine}</div>
-      <div class="nb"><b>Neighbours:</b> ${neighbourRule(f)}</div>
-      ${nowLine}
-      ${f.mods?.length ? `<ul class="mods">${modList(f)}</ul>` : ''}${comboLine(f)}
-      <div class="row">${Engine.socketsOf(f).map((sk, s) => f.runes[s] ? `<button class="small ghost" data-unsocket="${s}">Remove ${EL[f.runes[s].el].icon} ${R[f.runes[s].rank]}</button>` : `<span class="dim small">empty ${EL[sk.el].icon} ${EL[sk.el].name} socket</span>`).join(' ')}</div>
-      <div class="row">${f.lvl < Engine.MAX_LEVEL ? `<button class="small" data-act="upgrade" ${canAfford(Engine.upgradeCost(f)) ? '' : 'disabled'}>⬆ Upgrade to +${f.lvl} (${costLabel(Engine.upgradeCost(f))})</button>` : '<span class="dim small">Max level</span>'}
-      <button class="small" data-act="move">Move</button><button class="small" data-act="rot">Rotate</button>
-      <button class="small" data-act="store">Put in storage</button><button class="small ghost" data-act="close">✕</button></div></div>`;
+    const nowLine = !L.booster && !L.out.length ? ''
+      : L.dead ? '<p class="nb warn">Right now: boosting nothing, because its sockets are empty.</p>'
+        : L.out.length ? `<p class="nb">Right now it's boosting: <b>${L.out.map(nameOf).join(', ')}</b>.</p>`
+          : `<p class="nb warn">Right now: boosting nothing${f.type === 'capacitor' ? ' (it only helps weapons, and none touch it)' : ' (nothing it can help is touching it)'}.</p>`;
+    panel = `<div class="inspect-panel" style="--inspect-color:${rarColor(f)}">${head(f, 'EQUIPPED', f.rot)}
+      <p class="nb">${powerLine}</p><p class="nb"><b>Neighbours:</b> ${neighbourRule(f)}</p>${nowLine}
+      ${modLines(f)}${comboLine(f)}
+      <div class="inspect-actions">${Engine.socketsOf(f).map((sk, s) => f.runes[s] ? `<button class="button small ghost" data-unsocket="${s}">Remove ${EL[f.runes[s].el].icon} ${R[f.runes[s].rank]}</button>` : '').join('')}</div>
+      <div class="inspect-actions"><button class="button small" data-act="rot">↻ Rotate</button><button class="button small" data-act="move">✥ Move</button>
+      <button class="button small ghost" data-act="store">Store</button>
+      ${f.lvl < Engine.MAX_LEVEL ? `<button class="button small" data-act="upgrade" ${canAfford(Engine.upgradeCost(f)) ? '' : 'disabled'}>↑ Upgrade · ${costLabel(Engine.upgradeCost(f))}</button>` : '<span class="dim-label">MAX LEVEL</span>'}
+      <button class="button small ghost" data-act="close">✕</button></div></div></div>`;
   } else if (held2 && !locked) {
-    // holding a component (from storage, or moving one): show its shape big, turned the way it will be placed
-    panel = `<div class="focusbox" style="border-color:${RAR[held2.rarity || 'common'].color}">
-      <div class="fhead">${bigShape(held2, held.rot)}<div><b>${compTitle(held2)}</b> <span class="dim">· ${RAR[held2.rarity || 'common'].name} · ${Engine.shapeOf(held2).length} square${Engine.shapeOf(held2).length === 1 ? '' : 's'}</span><br>
-      <small>${esc(COMP[held2.type].desc)}</small>${takes(held2)}</div></div>
-      <div class="nb"><b>Neighbours:</b> ${neighbourRule(held2)}</div>
-      ${held2.mods?.length ? `<ul class="mods">${modList(held2)}</ul>` : ''}${comboLine(held2)}
-      <div class="row"><button class="small" data-act="hrot">⟳ Rotate (R)</button><button class="small ghost" data-act="hdrop">Put it down (Esc)</button></div>
-      <p class="hint">Move over your machine to see where it lands, then click to place it.</p></div>`;
+    const inStorage = Y.storage.some((it) => it.id === held2.id);
+    const others = S.players.filter((p) => p.ref !== Y.ref);
+    panel = `<div class="inspect-panel holding" style="--inspect-color:${rarColor(held2)}">${head(held2, inStorage ? 'IN STORAGE · HOLDING' : 'MOVING', held.rot)}
+      <p class="nb"><b>Neighbours:</b> ${neighbourRule(held2)}</p>${modLines(held2)}${comboLine(held2)}
+      <p class="nb hint-line">Move over your machine to see where it lands, then click to place it.</p>
+      <div class="inspect-actions"><button class="button small" data-act="hrot">↻ Rotate (R)</button><button class="button small ghost" data-act="hdrop">Put it down (Esc)</button>
+      ${inStorage && held2.lvl < Engine.MAX_LEVEL ? `<button class="button small" data-act="hupgrade" ${canAfford(Engine.upgradeCost(held2)) ? '' : 'disabled'}>↑ Upgrade · ${costLabel(Engine.upgradeCost(held2))}</button>` : ''}
+      ${inStorage ? `<button class="button small ghost" data-act="hsalvage">♻ Salvage · +${Engine.itemEssence(held2)} ✧</button>` : ''}</div>
+      ${inStorage && others.length ? `<div class="inspect-actions"><span class="dim-label">GIVE TO</span>${others.map((p) => `<button class="button small ghost" data-giveitem="${p.ref}">${p.el ? EL[p.el].icon + ' ' : ''}${esc(p.name)}</button>`).join('')}</div>` : ''}</div></div>`;
+  } else {
+    panel = `<div class="inspect-panel"><div class="inspect-placeholder"><span>◇</span><div>${locked ? 'Your machine is in the Rift. Recall it to make changes.' : 'Select a machine component or a stored item to reveal its properties.'}</div></div></div>`;
   }
   setHTML($('focus'), panel);
 
@@ -533,83 +556,90 @@ function renderMachine() {
     : held?.kind === 'comp' && hoverCell && !ghostOk ? `<span class="warn">${ghostOff ? `${ghostOff} square${ghostOff === 1 ? '' : 's'} would hang off the machine.` : 'That overlaps another component.'}</span> Press <b>R</b> to rotate, <b>Esc</b> to cancel.`
     : held?.kind === 'comp' ? 'The piece follows your cursor: click to place it. Press <b>R</b> to rotate, <b>Esc</b> to cancel.'
       : held?.kind === 'rune' ? 'Click a glowing socket to put the rune in. It swaps with any rune already there.'
-        : 'Click a rune or a stored component to pick it up. Click a component in the machine to inspect it.');
+        : 'Select a component to inspect it. Pick up a rune or a stored item to place it.');
 
-  // storage
-  setHTML($('storage'), `<div class="dim small">Essence: <b class="gold">${fmt(Y.essence || 0)} ✦</b> (salvage spare runes and components to get more)</div>` +
-    (Y.storage.length ? Y.storage.map((it) => `<div class="card ${held?.kind === 'comp' && held.id === it.id ? 'sel' : ''}" data-item="${it.id}" style="border-color:${RAR[it.rarity || 'common'].color}55">
-      ${miniShape(it.type, held?.id === it.id ? held.rot : 0, it)}<div style="flex:1"><b>${compTitle(it)}</b> <span class="dim small">${RAR[it.rarity || 'common'].name}</span>
-      <small>${esc(COMP[it.type].desc)} ${Engine.shapeOf(it).length} square${Engine.shapeOf(it).length === 1 ? '' : 's'}.</small>${takes(it)}${comboLine(it)}
-      ${it.mods?.length ? `<ul class="mods">${modList(it)}</ul>` : ''}</div>
-      <div class="cardbtns">${it.lvl < Engine.MAX_LEVEL ? `<button class="small ghost" data-upgrade="${it.id}" ${canAfford(Engine.upgradeCost(it)) ? '' : 'disabled'}>⬆ ${costLabel(Engine.upgradeCost(it))}</button>` : ''}
-      <button class="small ghost" data-salvage="${it.id}">♻ +${Engine.itemEssence(it)} ✦</button></div></div>`).join('')
-    : '<span class="dim">Empty. Components drop in the Rift (bosses always drop one), each with random rarity, sockets and modifiers.</span>'));
+  // storage: compact buttons; details appear in the inspection panel when you pick one up
+  $('storage-count').textContent = `${Y.storage.length} ITEM${Y.storage.length === 1 ? '' : 'S'}`;
+  setHTML($('storage'), Y.storage.length ? Y.storage.map((it) => `<button class="storage-item ${held?.kind === 'comp' && held.id === it.id ? 'selected' : ''}" data-item="${it.id}" style="--item-rarity:${rarColor(it)}">
+      <span class="storage-icon" style="color:${COMP[it.type].color}">${shapeArt(it, 0, 9)}</span><span class="storage-item-text"><strong>${esc(Engine.itemName(it))}</strong>
+      <small>${RAR[it.rarity || 'common'].name.toUpperCase()} · LEVEL ${it.lvl} · ${Engine.socketsOf(it).map((sk) => EL[sk.el].icon).join(' ')}</small></span></button>`).join('')
+    : '<div class="empty-storage">Empty. Components drop in the Rift (bosses always drop one), each with a random shape, sockets and modifiers.</div>');
 
   // runes
+  $('rune-count').textContent = `${Y.pouch.length} RUNE${Y.pouch.length === 1 ? '' : 'S'}`;
   setHTML($('pouch'), Y.pouch.length ? [...Y.pouch].sort((a, b) => a.el.localeCompare(b.el) || b.rank - a.rank)
-    .map((r) => runeChip(r, held?.kind === 'rune' && held.id === r.id ? 'sel' : '')).join('') : '<span class="dim">No loose runes.</span>');
+    .map((r) => `<button class="rune-chip ${held?.kind === 'rune' && held.id === r.id ? 'selected' : ''}" data-rune="${r.id}" style="--element-color:${EL[r.el].color}" title="${EL[r.el].name} rune, rank ${R[r.rank]}">${runeImg(r, 'chip-rune')}<span class="roman">${R[r.rank]}</span></button>`).join('')
+    : '<p class="pouch-caption">No loose runes. They drop in the Rift.</p>');
   const rg = {};
   for (const r of Y.pouch) { const k = `${r.el}:${r.rank}`; rg[k] = (rg[k] || 0) + 1; }
   const fuses = Object.entries(rg).filter(([k, n]) => n >= 3 && +k.split(':')[1] < Engine.MAX_RANK)
-    .map(([k]) => { const [el, rank] = k.split(':'); return `<button data-fuse="${k}" class="small">Fuse 3× ${EL[el].icon} ${R[rank]} → ${R[+rank + 1]}</button>`; });
+    .map(([k]) => { const [el, rank] = k.split(':'); return `<button data-fuse="${k}" class="button small">Fuse 3× ${EL[el].icon} ${R[rank]} → ${R[+rank + 1]}</button>`; });
   const others = S.players.filter((p) => p.ref !== Y.ref);
-  const canGive = held && others.length && (held.kind === 'rune' || Y.storage.some((it) => it.id === held.id));
   const spareI = Y.pouch.filter((r) => r.rank === 1 && r.el !== Y.el);
   const heldRune = held?.kind === 'rune' && Y.pouch.find((r) => r.id === held.id);
-  setHTML($('pouchActions'), `<div class="row">${fuses.join('')}${spareI.length ? `<button class="small ghost" data-act="salvageI">♻ Salvage ${spareI.length} off-element rank I (+${spareI.length} ✦)</button>` : ''}</div>
-    ${held ? `<div class="row">${held.kind === 'comp' ? '<button class="small" data-act="rotate">Rotate (R)</button>' : ''}<button class="small ghost" data-act="drop">Put it down (Esc)</button>
-      ${heldRune ? `<button class="small ghost" data-act="salvageRune">♻ Salvage (+${Engine.runeEssence(heldRune)} ✦)</button>` : ''}
-      ${canGive ? `<span class="dim">Give it to:</span> ${others.map((p) => `<button data-give="${p.ref}" class="small ghost">${p.el ? EL[p.el].icon + ' ' : ''}${esc(p.name)}</button>`).join('')}` : ''}</div>` : ''}`);
+  setHTML($('pouchActions'), `${fuses.length || spareI.length ? `<div class="inspect-actions">${fuses.join('')}${spareI.length ? `<button class="button small ghost" data-act="salvageI">♻ Salvage ${spareI.length} off-element rank I · +${spareI.length} ✧</button>` : ''}</div>` : ''}
+    ${heldRune ? `<div class="inspect-actions"><button class="button small ghost" data-act="drop">Put it down (Esc)</button><button class="button small ghost" data-act="salvageRune">♻ Salvage · +${Engine.runeEssence(heldRune)} ✧</button>
+      ${others.length ? `<span class="dim-label">GIVE TO</span>${others.map((p) => `<button data-give="${p.ref}" class="button small ghost">${p.el ? EL[p.el].icon + ' ' : ''}${esc(p.name)}</button>`).join('')}` : ''}</div>` : ''}
+    <p class="pouch-caption">${heldRune ? 'Select a socket in the grid to place it.' : 'Select a rune, then select a socket in the grid.'}</p>`);
 
-  setHTML($('compList'), Engine.COMPONENT_KEYS.map((k) => `<div class="row">${miniShape(k)} <span><b>${COMP[k].name}</b>: ${esc(COMP[k].desc)}</span></div>`).join(''));
+  setHTML($('compList'), Engine.COMPONENT_KEYS.map((k) => `<div class="comp-row"><span class="tile-glyph" style="--component-color:${COMP[k].color}">${GLYPH[k]}</span> <span><b>${COMP[k].name}</b>: ${esc(COMP[k].desc)}</span></div>`).join(''));
 }
 
 function renderRift() {
   const D = S.dive, Y = me();
   const bottom = (html) => setHTML($('riftBottom'), html);
-  const units = (D) => `<div class="units">${D.units.map((u) => `<div class="unit ${u.status}"><span>${u.el ? `<span class="elc el-${u.el}">${EL[u.el].icon}</span> ` : ''}<b>${esc(u.name)}</b>${u.me ? ' (you)' : ''}</span>
-    <span class="dim">${u.status === 'fighting' ? `${fmt(u.dmg * (1 + u.charge))} dmg/s${u.charge > 0.05 ? ` <span class="gold">⚡×${(1 + u.charge).toFixed(1)}</span>` : ''} · ${u.runes} rune${u.runes === 1 ? '' : 's'}${u.comps ? ` · ${u.comps} part${u.comps === 1 ? '' : 's'}` : ''}` : u.status === 'recalled' ? 'came home' : 'destroyed'}</span>
-    ${u.status === 'fighting' ? `<div class="bar party"><div style="width:${100 * u.hp / u.maxHp}%"></div></div>` : ''}</div>`).join('')}</div>`;
+  const unitRow = (u) => `<div class="health-row"><span>${u.el ? `<span style="color:${EL[u.el].color}">${EL[u.el].icon}</span> ` : ''}${u.me ? 'YOUR MACHINE' : esc(u.name).toUpperCase()} · ${u.status === 'fighting' ? 'HULL' : u.status === 'recalled' ? 'CAME HOME' : 'DESTROYED'}</span>
+      <strong>${u.status === 'fighting' ? `${Math.round(100 * u.hp / u.maxHp)}%${u.charge > 0.05 ? ` <span class="gold">⚡×${(1 + u.charge).toFixed(1)}</span>` : ''}` : '—'}</strong></div>
+    ${u.status === 'fighting' ? `<div class="bar green"><span style="width:${100 * u.hp / u.maxHp}%"></span></div>` : ''}`;
 
   // what happened on your last dive (until you dismiss it)
   const L = Y.lastDive;
-  const summary = L && localStorage.seenDive != L.at && !Y.diving ? `<div class="summary ${L.destroyed ? 'bad' : 'good'}">
-      <b>${L.destroyed ? `💥 Your machine was destroyed on floor ${L.floor}` : `🏳 Your machine came home from floor ${L.floor}`}</b> (Tier ${L.tier})<br>
-      Brought back ${fmt(L.essence || 0)} Essence, ${L.runes} rune${L.runes === 1 ? '' : 's'}${L.comps.length ? ` and ${L.comps.map(esc).join(', ')}` : ''}.
+  const summary = L && localStorage.seenDive != L.at && !Y.diving ? `<div class="dive-summary ${L.destroyed ? 'bad' : 'good'}">
+      <b>${L.destroyed ? `💥 Destroyed on floor ${L.floor}` : `🏳 Home safe from floor ${L.floor}`}</b> · Tier ${L.tier}<br>
+      Brought back <b>${fmt(L.essence || 0)} Essence</b>, ${L.runes} rune${L.runes === 1 ? '' : 's'}${L.comps.length ? ` and ${L.comps.map(esc).join(', ')}` : ''}.
       ${L.destroyed ? `<br>Lost: ${L.lostItems.length ? L.lostItems.map(esc).join(', ') : 'no components'}${L.lostRunes.length ? `, ${L.lostRunes.length} socketed rune(s)` : ''}.` : ''}
-      <button class="small ghost" data-act="dismiss">OK</button></div>` : '';
+      <button class="button small ghost" data-act="dismiss">OK</button></div>` : '';
 
   if (Y.diving) {
-    const e = D.enemy;
-    setHTML($('rift'), `<h2>The Rift · Tier ${D.tier} · Floor ${D.floor}${D.formation > 1 ? ` <span class="formation">Formation ×${D.formation.toFixed(2)}</span>` : ''}</h2>
-      ${e ? `<div class="enemy ${e.boss ? 'boss' : ''}"><div class="name">${e.boss ? '☠ ' : ''}${esc(e.name)}</div>
-        <div class="bar hp"><div style="width:${100 * e.hp / e.maxHp}%"></div></div><div class="dim">${fmt(e.hp)} / ${fmt(e.maxHp)} · hits for ${e.atk}</div></div>`
-        : '<div class="enemy"><div class="name" style="color:#7ee787">Descending…</div><div class="bar"><div></div></div><div>&nbsp;</div></div>'}
-      ${units(D)}`);
+    const e = D.enemy, mine = D.units.find((u) => u.me);
+    setHTML($('rift'), `<span class="rift-active-title">✧ &nbsp; LIVE EXPEDITION / TIER ${pad2(D.tier)} · FLOOR ${D.floor}</span>
+      <div class="enemy-frame ${e && e.boss ? 'boss' : ''}">${e ? `<div class="enemy-symbol">${e.boss ? '☠' : '◉'}</div><div class="enemy-name">${esc(e.name)}</div>
+        <div class="health-row"><span>ENEMY INTEGRITY · HITS FOR ${e.atk}</span><strong>${fmt(e.hp)} / ${fmt(e.maxHp)}</strong></div><div class="bar red"><span style="width:${100 * e.hp / e.maxHp}%"></span></div>`
+        : '<div class="enemy-symbol descending">✧</div><div class="enemy-name" style="color:#9fcfb2">Descending…</div><div class="health-row"><span>&nbsp;</span></div><div class="bar red"><span style="width:0"></span></div>'}</div>
+      ${D.units.map(unitRow).join('')}
+      <div class="battle-readout"><span>◈ Formation ×${D.formation.toFixed(2)}</span><span>Runes <b>${mine ? mine.runes : 0}</b> &nbsp; Parts <b>${mine ? mine.comps : 0}</b></span></div>`);
+    $('arenaMeta').textContent = 'CLICK TARGETS · BLOCK THE RED SHIELDS';
     setArena('fight', '', D.arena);
     syncBlocks();
-    bottom(`<p class="hint">Your machine fights on its own. Click targets to <b>overcharge</b> it (dead centre and long combos charge most).
-      When a red <b>🛡 shield</b> appears, the enemy is about to hit you: click it to <b>block</b> (dead centre hits back). Hit <b>⚡ linked targets</b> together with a crewmate for a burst.
-      It comes home by itself at ${Math.round(Y.recallPct * 100)}% HP.</p><div class="row"><button data-act="recall">🏳 Recall now</button></div>`);
+    bottom(`<div class="rift-actions"><button class="button ghost" data-act="recall">⚑ Recall now</button></div>
+      <p class="rift-footnote">Your machine fights on its own. Click targets to <b>overcharge</b> it, click red <b>⬡ shields</b> to block incoming hits,
+      and hit <b>ϟ linked targets</b> together with a crewmate. It comes home by itself at ${Math.round(Y.recallPct * 100)}% hull.</p>`);
     return;
   }
   // Just came home: keep the arena where it was (inert) for a moment so leftover clicks land on nothing.
-  if (L && (diveEndSeen[L.at] ??= Date.now()) > Date.now() - 2500) setArena('inert', L.destroyed ? '💥 Destroyed!' : '🏳 Home safe');
+  if (L && (diveEndSeen[L.at] ??= Date.now()) > Date.now() - 2500) setArena('inert', `<div class="arena-msg">${L.destroyed ? '💥 Destroyed!' : '🏳 Home safe'}</div>`);
   else setArena('off');
   const t = S.tiers.max;
   if (!selectedTier || selectedTier > t) selectedTier = t;
   const tier = D ? D.tier : selectedTier;
-  setHTML($('rift'), `<h2>The Rift</h2>${summary}
-    ${D ? `<p><b>A Tier ${D.tier} dive is underway</b> (floor ${D.floor}).</p>${units(D)}` : `<p>Send your machine into the Rift. It fights on its own, floor by floor, and keeps going while you're away.
-      Every kill drops <b>Essence</b> and runes (mostly your element), and sometimes a rolled component; bosses always drop one.
-      If it's destroyed, it keeps only half of what it found and each installed part has a 30% chance to be lost.
-      <b>Each tier is a big step up</b>: dive together, since every extra machine gives the whole team <b>+15% damage</b> (Formation) and enemies grow slower than your crew does.</p>
-      <div class="row tiers">${Array.from({ length: t }, (_, i) => `<button data-act="tier" data-tier="${i + 1}" class="small ${i + 1 === selectedTier ? 'on-tier' : 'ghost'}">Tier ${i + 1}</button>`).join('')}
-        </div>
-      <p class="dim small">Tiers unlock when any crew machine reaches: ${S.tiers.ladder.map((l) => `Tier ${l.tier} at <b>${fmt(l.req)}</b>`).join(' · ')}.
-        Your machine: <b class="gold">${fmt(Y.machine ? Engine.stats(Y.machine).resonance : 0)}</b>. Higher tiers: tougher enemies, better runes and components.</p>`}
-    <div class="row"><label class="dim">Come home at <select id="recallSel" data-value="${Y.recallPct}">${[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7].map((v) => `<option value="${v}" ${Math.abs(v - Y.recallPct) < 0.01 ? 'selected' : ''}>${Math.round(v * 100)}% HP</option>`).join('')}</select></label></div>
-    <button class="big" data-act="dive" ${!Y.machine ? 'disabled' : ''}>${D ? `Join the Tier ${D.tier} dive` : `Send your machine into Tier ${tier}`}</button>`);
+  const tiersShown = Math.max(5, t + 1);
+  const mineRes = Y.machine ? Engine.stats(Y.machine).resonance : 0;
+  const formation = S.players.filter((p) => p.el).slice(0, 5);
+  setHTML($('rift'), `<div class="rift-visual"><div class="rift-stars"></div><div class="rift-ring"></div><span class="rift-gem">◈</span><div class="portal-caption">RIFT SIGNATURE · ${pad2(tier)}</div></div>
+    ${summary}
+    ${D ? `<div class="label-row"><span>DIVE UNDERWAY</span><small>Tier ${D.tier} · floor ${D.floor}</small></div>${D.units.map(unitRow).join('')}`
+      : `<div class="label-row"><span>SELECT RIFT TIER</span><small>Highest unlocked: ${R[t] || t}</small></div>
+      <div class="tier-buttons">${Array.from({ length: tiersShown }, (_, i) => i + 1).map((n) => n <= t
+        ? `<button class="tier-button ${n === selectedTier ? 'selected' : ''}" data-act="tier" data-tier="${n}" aria-pressed="${n === selectedTier}">${pad2(n)}</button>`
+        : `<button class="tier-button locked" disabled title="Unlocks at Resonance ${fmt(S.tiers.ladder.find((l) => l.tier === n)?.req ?? 0)}">🔒</button>`).join('')}</div>
+      <p class="rift-footnote">Next: Tier ${t + 1} at Resonance <b>${fmt(S.tiers.nextReq)}</b> (your machine: ${fmt(mineRes)}).</p>`}
+    <div class="label-row"><span>AUTOMATIC RECALL</span><small>Hull safety</small></div>
+    <select class="rift-select" id="recallSel" data-value="${Y.recallPct}">${[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7].map((v) => `<option value="${v}" ${Math.abs(v - Y.recallPct) < 0.01 ? 'selected' : ''}>Come home at ${Math.round(v * 100)}% hull integrity</option>`).join('')}</select>
+    <button class="button primary dive-button" data-act="dive" ${!Y.machine ? 'disabled' : ''}><span>✧</span> ${D ? `JOIN THE TIER ${D.tier} DIVE` : 'SEND MACHINE INTO THE RIFT'} <span>↗</span></button>
+    <p class="rift-footnote">Every kill drops Essence and runes; bosses always drop a component. Destroyed machines keep half and may lose parts.</p>
+    <div class="formation-preview"><div class="subhead">ACTIVE FORMATION <span>+15% DAMAGE PER EXTRA MACHINE</span></div>
+      <div class="formation-cards">${formation.map((p) => `<div class="formation-item"><span style="color:${EL[p.el].color}">${EL[p.el].icon}</span>${esc(p.ref === Y.ref ? 'You' : p.name)}<small>${p.status ? 'Diving' : p.online ? 'Ready' : 'Away'}</small></div>`).join('') || '<div class="formation-item"><span>✧</span>Nobody yet<small>—</small></div>'}</div>
+      <p class="expedition-hint">Machines fight automatically. During a dive, <strong>click targets</strong> to overcharge, block attacks and build combos.</p></div>`);
   bottom('');
 }
 
