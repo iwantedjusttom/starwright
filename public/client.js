@@ -108,14 +108,44 @@ function miniShape(type, rot = 0, it = null) {
   return out + '</span>';
 }
 
+// Pieces are held by their middle square: it stays under the cursor and rotation spins around it.
+function handleIndex(it) {
+  const cells = Engine.cellsFor(it, 0);
+  const cx = cells.reduce((s, c) => s + c[0], 0) / cells.length, cy = cells.reduce((s, c) => s + c[1], 0) / cells.length;
+  let best = 0, bd = Infinity;
+  cells.forEach(([x, y], i) => { const d = (x - cx) ** 2 + (y - cy) ** 2; if (d < bd - 1e-9) { bd = d; best = i; } });
+  return best;
+}
+// Top-left position that puts the piece's handle square on grid square (hx, hy) at rotation rot.
+function anchorFor(it, rot, hx, hy) {
+  const [cx, cy] = Engine.cellsFor(it, rot)[handleIndex(it)];
+  return [hx - cx, hy - cy];
+}
+// Rotate an installed piece in place; if it doesn't fit, try nudging it up to 2 squares in any direction.
+function rotateInstalled(it) {
+  const m = me().machine, rot = (it.rot + 1) % 4;
+  const [hcx, hcy] = Engine.cellsFor(it, it.rot)[handleIndex(it)];
+  const [ax, ay] = anchorFor(it, rot, it.x + hcx, it.y + hcy);
+  const kicks = [[0, 0]];
+  for (let d = 1; d <= 2; d++) for (let dx = -d; dx <= d; dx++) for (let dy = -d; dy <= d; dy++) if (Math.max(Math.abs(dx), Math.abs(dy)) === d) kicks.push([dx, dy]);
+  kicks.sort((a, b) => Math.hypot(...a) - Math.hypot(...b));
+  const rest = m.items.filter((o) => o.id !== it.id);
+  for (const [dx, dy] of kicks) {
+    const trial = { ...m, items: [...rest, { ...it, x: ax + dx, y: ay + dy, rot }] };
+    if (Engine.fits(trial)) return send({ type: 'place', itemId: it.id, x: ax + dx, y: ay + dy, rot });
+  }
+  toast('No room to rotate it here. Move it somewhere roomier first.');
+}
+
 // What the machine would look like after the held thing is dropped on the hovered cell (for previews).
 function trialMachine() {
   const m = me().machine;
   if (!m || !held || !hoverCell) return null;
-  const [x, y] = hoverCell;
+  let [x, y] = hoverCell;
   const items = m.items.map((it) => ({ ...it, runes: [...it.runes] }));
   if (held.kind === 'comp') {
     const src = findItem(held.id); if (!src) return null;
+    [x, y] = anchorFor(src, held.rot, x, y);
     const rest = items.filter((it) => it.id !== held.id);
     return { m: { ...m, items: [...rest, { ...src, runes: [...src.runes], x, y, rot: held.rot }] }, ok: null };
   }
@@ -169,7 +199,7 @@ $('focus').onclick = (e) => {
   if (b.dataset.act === 'store') { send({ type: 'store', itemId: it.id }); focusId = null; }
   if (b.dataset.act === 'upgrade') send({ type: 'upgrade', itemId: it.id });
   if (b.dataset.act === 'move') { held = { kind: 'comp', id: it.id, rot: it.rot }; focusId = null; render(); }
-  if (b.dataset.act === 'rot') send({ type: 'place', itemId: it.id, x: it.x, y: it.y, rot: it.rot + 1 });
+  if (b.dataset.act === 'rot') rotateInstalled(it);
   if (b.dataset.unsocket) send({ type: 'unsocket', itemId: it.id, s: +b.dataset.unsocket });
   if (b.dataset.act === 'close') { focusId = null; render(); }
 };
@@ -186,7 +216,10 @@ $('machineGrid').addEventListener('pointerleave', () => { hoverCell = null; rend
 $('machineGrid').onclick = (e) => {
   const c = e.target.closest('[data-x]'); if (!c || !S) return;
   const x = +c.dataset.x, y = +c.dataset.y;
-  if (held?.kind === 'comp') { send({ type: 'place', itemId: held.id, x, y, rot: held.rot }); held = null; return; }
+  if (held?.kind === 'comp') {
+    const [ax, ay] = anchorFor(findItem(held.id), held.rot, x, y);
+    send({ type: 'place', itemId: held.id, x: ax, y: ay, rot: held.rot }); held = null; return;
+  }
   const sock = socketAt(x, y);
   if (held?.kind === 'rune') {
     if (sock && sock.s >= 0) { send({ type: 'socket', itemId: sock.item.id, s: sock.s, runeId: held.id }); held = null; }
@@ -339,11 +372,16 @@ function renderMachine() {
     const k = (it.y + cy) * m.w + it.x + cx; occ[k] = it.id; cellInfo[k] = { it, ci };
   });
   // ghost for a held component
-  const ghost = new Set(); let ghostOk = false;
+  const ghost = new Set(); let ghostOk = false, ghostOff = 0;
   if (held?.kind === 'comp' && hoverCell) {
-    const trial = trialMachine();
+    const trial = trialMachine(), src = findItem(held.id);
     ghostOk = !!trial && Engine.fits(trial.m);
-    Engine.cellsFor(findItem(held.id), held.rot).forEach(([cx, cy]) => ghost.add(`${hoverCell[0] + cx},${hoverCell[1] + cy}`));
+    const [ax, ay] = anchorFor(src, held.rot, hoverCell[0], hoverCell[1]);
+    Engine.cellsFor(src, held.rot).forEach(([cx, cy]) => {
+      const gx = ax + cx, gy = ay + cy;
+      if (gx < 0 || gy < 0 || gx >= m.w || gy >= m.h) ghostOff++;
+      ghost.add(`${gx},${gy}`);
+    });
   }
   const stats = Engine.stats(m);
   let html = '';
@@ -398,7 +436,8 @@ function renderMachine() {
     <button class="small" data-act="store">Put in storage</button><button class="small ghost" data-act="close">✕</button></div></div>` : '');
 
   setHTML($('helpline'), locked ? '🔒 Your machine is in the Rift. Recall it to make changes.'
-    : held?.kind === 'comp' ? 'Click a square to place it (top-left corner). Press <b>R</b> to rotate, <b>Esc</b> to cancel.'
+    : held?.kind === 'comp' && hoverCell && !ghostOk ? `<span class="warn">${ghostOff ? `${ghostOff} square${ghostOff === 1 ? '' : 's'} would hang off the machine.` : 'That overlaps another component.'}</span> Press <b>R</b> to rotate, <b>Esc</b> to cancel.`
+    : held?.kind === 'comp' ? 'The piece follows your cursor: click to place it. Press <b>R</b> to rotate, <b>Esc</b> to cancel.'
       : held?.kind === 'rune' ? 'Click a glowing socket to put the rune in. It swaps with any rune already there.'
         : 'Click a rune or a stored component to pick it up. Click a component in the machine to inspect it.');
 
