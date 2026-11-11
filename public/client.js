@@ -423,7 +423,22 @@ function renderMachine() {
   }
   const stats = Engine.stats(m);
   const fl = focusId && stats.links[focusId];
-  const focusLinks = fl ? { from: new Set(fl.in.map((l) => l.from).filter((x) => x !== null && x !== focusId)), to: new Set(fl.out) } : null;
+  // Labels written on the pieces around the one you clicked: "gives +40%" (helping it) / "gets +40%" (it helps them).
+  const badges = {};
+  if (fl) {
+    const prod = (arr) => arr.reduce((p, l) => p * l.f, 1);
+    const givers = {};
+    for (const l of fl.in) if (l.from !== null && l.from !== focusId) (givers[l.from] = givers[l.from] || []).push(l);
+    for (const [id, ls] of Object.entries(givers)) { const f = prod(ls); badges[id] = { text: f >= 1 ? `gives ${pct(f)}` : `drains ${pct(f)}`, cls: f >= 1 ? 'give' : 'drain' }; }
+    for (const id of fl.out) {
+      const f = prod(stats.links[id].in.filter((l) => l.from === focusId));
+      const got = { text: f >= 1 ? `gets ${pct(f)}` : `loses ${pct(f)}`, cls: f >= 1 ? 'get' : 'drain' };
+      // e.g. two coils boosting each other
+      badges[id] = !badges[id] ? got : badges[id].text.split(' ')[1] === got.text.split(' ')[1]
+        ? { text: `↔ ${got.text.split(' ')[1]} both ways`, cls: 'both' } : { text: `${badges[id].text} · ${got.text}`, cls: 'both' };
+    }
+    if (fl.dead && fl.booster) badges[focusId] = { text: 'off: no runes', cls: 'drain' };
+  }
   let html = '';
   for (let y = 0; y < m.h; y++) for (let x = 0; x < m.w; x++) {
     const k = y * m.w + x, info = cellInfo[k];
@@ -434,8 +449,6 @@ function renderMachine() {
       style = `--cc:${def.color}`;
       cls.push('filled');
       if (it.id === focusId) cls.push('focused');
-      if (focusLinks?.from.has(it.id)) cls.push('link-in');
-      if (focusLinks?.to.has(it.id)) cls.push('link-out');
       const same = (dx, dy) => { const nx = x + dx, ny = y + dy; return nx >= 0 && ny >= 0 && nx < m.w && ny < m.h && occ[ny * m.w + nx] === it.id; };
       if (!same(0, -1)) cls.push('bt'); if (!same(0, 1)) cls.push('bb'); if (!same(-1, 0)) cls.push('bl'); if (!same(1, 0)) cls.push('br');
       const socks = Engine.socketsOf(it);
@@ -446,6 +459,7 @@ function renderMachine() {
         inner = r ? `<span class="sock full el-${r.el} ${r.el === want ? '' : 'mismatch'}" title="${EL[r.el].name} ${R[r.rank]} in a ${EL[want].name} socket">${EL[r.el].icon}<sub>${R[r.rank]}</sub>${r.el === want ? '' : `<span class="want el-${want}">wants ${EL[want].name}</span>`}</span>`
           : `<span class="sock el-${want}" title="wants a ${EL[want].name} rune">${EL[want].icon}<span class="want">${EL[want].name}</span></span>`;
       }
+      if (badges[it.id] && ci === handleIndex(it)) inner += `<span class="badge ${badges[it.id].cls}">${badges[it.id].text}</span>`;
       if (ci === 0) inner += `<span class="cname" style="color:${RAR[it.rarity || 'common'].color}">${esc(def.name.split(' ').pop())}${it.lvl > 1 ? ' +' + (it.lvl - 1) : ''}</span><span class="cpow">${fmt1(10 * (stats.power[it.id] || 0))}</span>`;
     }
     if (ghost.has(`${x},${y}`)) cls.push(ghostOk ? 'ghost-ok' : 'ghost-bad');
@@ -474,25 +488,27 @@ function renderMachine() {
   let panel = '';
   if (f && !locked) {
     const L = stats.links[f.id];
-    const inList = L.in.map((l) => `<li class="${l.f >= 1 ? 'buff' : 'curse'}">${l.from === null ? esc(l.why) : `${nameOf(l.from)} <span class="dim">(${esc(l.why)})</span>`} <b>${pct(l.f)}</b></li>`).join('');
+    const own = 10 * (stats.base[f.id] || 0), total = 10 * (stats.power[f.id] || 0);
+    // Power, in one sentence: what it has on its own, then each thing multiplying it.
+    const parts = L.in.map((l) => `×${(Math.round(l.f * 100) / 100)} ${l.from === null ? `from ${esc(l.why)}` : `because it touches the ${nameOf(l.from)}`}`);
+    const powerLine = L.dead ? '<span class="warn">Power 0: its sockets are empty, so it does nothing yet. Put a rune in it.</span>'
+      : `Power <b class="gold">${fmt1(total)}</b>: ${fmt1(own)} from its runes and level${parts.length ? ', ' + parts.join(', ') : ''}.`;
     const isBooster = L.booster;
-    const outText = L.dead && isBooster ? '<span class="warn">⚠ Its sockets are empty, so it boosts nothing. Socket a rune to switch it on.</span>'
-      : L.out.length ? L.out.map(nameOf).join(', ')
-        : isBooster ? `<span class="warn">Touches nothing it can boost${f.type === 'capacitor' ? ' (it only helps weapons)' : ''}.</span>` : '<span class="dim">nothing</span>';
+    const nowLine = !isBooster && !L.out.length ? ''
+      : L.dead ? '<div class="nb warn">Right now: boosting nothing, because its sockets are empty.</div>'
+        : L.out.length ? `<div class="nb">Right now it's boosting: <b>${L.out.map(nameOf).join(', ')}</b>.</div>`
+          : `<div class="nb warn">Right now: boosting nothing${f.type === 'capacitor' ? ' (it only helps weapons, and none touch it)' : ' (nothing it can help is touching it)'}.</div>`;
     panel = `<div class="focusbox" style="border-color:${RAR[f.rarity || 'common'].color}">
-      <div class="fhead">${bigShape(f, f.rot)}<div><b>${compTitle(f)}</b>
-      <div class="dim">${RAR[f.rarity || 'common'].name} · power <b class="gold">${fmt1(10 * (stats.power[f.id] || 0))}</b>
-        ${L.dead ? '<span class="warn">(off: no runes)</span>' : `<span class="small">(${fmt1(10 * (stats.base[f.id] || 0))} on its own${inList ? ', boosted by neighbours' : ''})</span>`}</div>
+      <div class="fhead">${bigShape(f, f.rot)}<div><b>${compTitle(f)}</b> <span class="dim">· ${RAR[f.rarity || 'common'].name}</span><br>
       <small>${esc(COMP[f.type].desc)}</small>${takes(f)}</div></div>
+      <div class="nb">${powerLine}</div>
       <div class="nb"><b>Neighbours:</b> ${neighbourRule(f)}</div>
-      <div class="nb"><span class="tag in">Boosted by</span> ${inList ? `<ul class="mods">${inList}</ul>` : '<span class="dim">nothing yet</span>'}</div>
-      ${isBooster || L.out.length ? `<div class="nb"><span class="tag out">Boosts</span> ${outText}</div>` : ''}
+      ${nowLine}
       ${f.mods?.length ? `<ul class="mods">${modList(f)}</ul>` : ''}${comboLine(f)}
       <div class="row">${Engine.socketsOf(f).map((sk, s) => f.runes[s] ? `<button class="small ghost" data-unsocket="${s}">Remove ${EL[f.runes[s].el].icon} ${R[f.runes[s].rank]}</button>` : `<span class="dim small">empty ${EL[sk.el].icon} ${EL[sk.el].name} socket</span>`).join(' ')}</div>
       <div class="row">${f.lvl < Engine.MAX_LEVEL ? `<button class="small" data-act="upgrade" ${canAfford(Engine.upgradeCost(f)) ? '' : 'disabled'}>⬆ Upgrade to +${f.lvl} (${costLabel(Engine.upgradeCost(f))})</button>` : '<span class="dim small">Max level</span>'}
       <button class="small" data-act="move">Move</button><button class="small" data-act="rot">Rotate</button>
-      <button class="small" data-act="store">Put in storage</button><button class="small ghost" data-act="close">✕</button></div>
-      <p class="hint">On the grid: <span class="tag in">green</span> pieces boost this one, <span class="tag out">gold</span> pieces are boosted by it.</p></div>`;
+      <button class="small" data-act="store">Put in storage</button><button class="small ghost" data-act="close">✕</button></div></div>`;
   } else if (held2 && !locked) {
     // holding a component (from storage, or moving one): show its shape big, turned the way it will be placed
     panel = `<div class="focusbox" style="border-color:${RAR[held2.rarity || 'common'].color}">
