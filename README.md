@@ -2,24 +2,25 @@
 
 A cooperative multiplayer idle game for a small group of friends (1–5 players).
 
-**The goal: climb the Rift Tiers.** Every tier has tougher enemies, smaller and faster targets, and stronger runes.
+**The goal: climb the Rift Tiers** by building stronger machines.
 
 **The loop**
 1. **Idle:** buildings make stardust all the time, even while everyone is away. Clicking adds more;
-   **Harmony** multiplies clicks when several people click within 1.5s of each other.
-2. **The Rift:** spend stardust to open a Rift of any unlocked tier. Hit targets near the centre (bullseyes crit),
-   chain combos, draft a boon between floors, and fight a boss every 5th floor. With two or more runners,
-   **⚡ linked targets** appear on two players' screens at once: hit them together (within 0.6s) for a triple strike.
-3. **Runes:** every runner gets their own rune drops, mostly in **their element** (Sun, Moon, Tide, Ember or Void,
-   chosen when you join). Retreat between floors to keep them all; fall and keep half. Three identical runes fuse
-   into one of the next rank. You can give runes to crewmates.
-4. **The Star Engine:** a shared grid where anyone can place runes. Runes affect the runes they touch (Sun boosts
-   neighbours, Moon loves Sun, Tide chains, Ember fizzles next to Tide, Void boosts its row but drains its neighbours).
-   The total is **Resonance**: it multiplies stardust production and Rift damage, and **reaching thresholds unlocks
-   the next Rift Tier**. The Engine grows from 3×3 to 4×4 (Tier 3) and 5×5 (Tier 6). Hovering a socket with a rune
-   selected previews the exact Resonance you'd get.
+   **Harmony** multiplies clicks when several people click within 1.5s of each other. Your crew's machines also boost production.
+2. **Your machine:** each player has a grid (starts 4×3, expandable with stardust). Components are shaped pieces
+   (Prism Lance, Ember Coil, Void Lash, Moon Shield, Sunplate, Tide Pump, Sun Capacitor, Void Core, Star Harvester)
+   with **rune sockets** that want certain elements: a matching rune powers them fully, a different element at 40%,
+   higher-rank runes are worth more. Many components **boost the components they touch** (capacitors power up
+   adjacent weapons, coils chain, a Void Core strengthens everything around it but costs HP…), so packing and placement matter.
+   Three identical components forge into a stronger one; three identical runes fuse into the next rank.
+   Your machine's total power is its **Resonance**, and reaching thresholds unlocks harder **Rift Tiers**.
+3. **The Rift:** send your machine in (friends can join the same dive). It fights floor by floor on its own and keeps going
+   while you're away, coming home by itself at the HP threshold you choose. While it fights, you can click targets to
+   **overcharge** it, and with two or more players, **⚡ linked targets** appear on two screens at once: hit them together for a burst.
+   Kills drop runes (mostly your element) and sometimes components; bosses always drop a component.
+   **If your machine is destroyed**, it keeps only half of what it found, and each installed component and socketed rune has a 30% chance to be lost.
 
-Because most of your runes match your own element, a great Engine needs everyone's runes.
+Most of your runes match your own element, so the best machines are built by trading with the crew.
 
 ## Run it
 
@@ -53,7 +54,7 @@ Without the Supabase variables, the server saves to local files in `data/` (fine
 ## Code map
 
 - `game.js`: all game rules (pure functions, unit-tested)
-- `public/engine.js`: the Star Engine's scoring rules, shared by the server and the browser
+- `public/engine.js`: machine rules (components, shapes, sockets, adjacency, stats), shared by the server and the browser
 - `server.js`: HTTP + WebSocket server, rooms, offline catch-up
 - `storage.js`: saves worlds to Supabase (if configured) or local JSON files
 - `public/`: the browser client (vanilla JS, no build step)

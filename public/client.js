@@ -7,8 +7,8 @@ const fmt = (n) => {
   while (n >= 1000 && i < u.length - 1) { n /= 1000; i++; }
   return n.toFixed(2) + u[i];
 };
+const fmt1 = (n) => (n >= 100 ? fmt(n) : (Math.round(n * 10) / 10).toString());
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const secs = (ms) => Math.max(0, Math.ceil(ms / 1000));
 
 // Update a panel in place: only changed text/attributes are touched, so buttons under the
 // cursor survive re-renders (replacing them mid-click would swallow clicks).
@@ -28,12 +28,12 @@ function morphChildren(a, b) {
     if (x.nodeType !== 1) { if (x.nodeValue !== y.nodeValue) x.nodeValue = y.nodeValue; return; }
     for (const at of [...x.attributes]) if (!y.hasAttribute(at.name)) x.removeAttribute(at.name);
     for (const at of [...y.attributes]) if (x.getAttribute(at.name) !== at.value) x.setAttribute(at.name, at.value);
+    if (x.tagName === 'SELECT' && x !== document.activeElement) x.value = y.getAttribute('data-value') ?? x.value;
     morphChildren(x, y);
   });
   for (let i = an.length - 1; i >= bn.length; i--) a.removeChild(an[i]);
 }
 
-// Instant feedback: a floating label where you clicked.
 function pop(e, text, cls = '') {
   const d = document.createElement('div');
   d.className = 'pop ' + cls; d.textContent = text;
@@ -42,8 +42,10 @@ function pop(e, text, cls = '') {
   setTimeout(() => d.remove(), 700);
 }
 
-let ws, S = null, selectedRune = null, selectedTier = null, hoverSocket = null;
-const runEndSeen = {}; // run-end time (server) → when this browser first saw it (local), avoids clock-skew issues
+let ws, S = null, selectedTier = null;
+const diveEndSeen = {};
+// What you're holding: { kind: 'rune', id } or { kind: 'comp', id, rot }. focusId: the installed component being inspected.
+let held = null, focusId = null, hoverCell = null;
 const pid = localStorage.pid || (localStorage.pid = Math.random().toString(36).slice(2) + Date.now().toString(36));
 $('name').value = localStorage.name || '';
 $('room').value = new URLSearchParams(location.search).get('crew') || localStorage.room || '';
@@ -73,8 +75,56 @@ if (localStorage.name && $('room').value) connect();
 let toastTimer;
 function toast(t) { $('toast').textContent = t; $('toast').classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').classList.remove('show'), 2500); }
 
+// ---------------------------------------------------------------- shared helpers
+const EL = Engine.ELEMENTS, COMP = Engine.COMPONENTS;
+const R = Engine.ROMAN;
+const runeChip = (r, extra = '') => `<span class="rune el-${r.el} ${extra}" data-rune="${r.id}" title="${EL[r.el].name} ${R[r.rank]}">${EL[r.el].icon}<sub>${R[r.rank]}</sub></span>`;
+const compTitle = (it) => `${COMP[it.type].name}${it.lvl > 1 ? ` <span class="gold">+${it.lvl - 1}</span>` : ''}`;
+const me = () => S.you;
+const allItems = () => [...(me().machine?.items || []), ...me().storage];
+const findItem = (id) => allItems().find((it) => it.id === id);
+function miniShape(type, rot = 0) {
+  const cells = Engine.cellsFor(type, rot), w = Math.max(...cells.map((c) => c[0])) + 1, h = Math.max(...cells.map((c) => c[1])) + 1;
+  const socketAt = new Map(COMP[type].sockets.map((s) => [s.c, s.el]));
+  let out = `<span class="mini" style="grid-template-columns:repeat(${w},12px)">`;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = cells.findIndex(([cx, cy]) => cx === x && cy === y);
+    out += i < 0 ? '<i></i>' : `<i class="on" style="background:${COMP[type].color}">${socketAt.has(i) ? `<b class="el-${socketAt.get(i)}"></b>` : ''}</i>`;
+  }
+  return out + '</span>';
+}
+
+// What the machine would look like after the held thing is dropped on the hovered cell (for previews).
+function trialMachine() {
+  const m = me().machine;
+  if (!m || !held || !hoverCell) return null;
+  const [x, y] = hoverCell;
+  const items = m.items.map((it) => ({ ...it, runes: [...it.runes] }));
+  if (held.kind === 'comp') {
+    const src = findItem(held.id); if (!src) return null;
+    const rest = items.filter((it) => it.id !== held.id);
+    return { m: { ...m, items: [...rest, { ...src, runes: [...src.runes], x, y, rot: held.rot }] }, ok: null };
+  }
+  const sock = socketAt(x, y); if (!sock) return null;
+  const rune = me().pouch.find((r) => r.id === held.id); if (!rune) return null;
+  const it = items.find((o) => o.id === sock.item.id);
+  it.runes[sock.s] = rune;
+  return { m: { ...m, items }, ok: true };
+}
+// The installed item + socket index at a grid square, if that square is a socket.
+function socketAt(x, y) {
+  const m = me().machine;
+  for (const it of m.items) {
+    const cells = Engine.cellsFor(it.type, it.rot);
+    const ci = cells.findIndex(([cx, cy]) => it.x + cx === x && it.y + cy === y);
+    if (ci < 0) continue;
+    const s = COMP[it.type].sockets.findIndex((sk) => sk.c === ci);
+    return s < 0 ? { item: it, s: -1 } : { item: it, s };
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------- input
-// The clicker fires on press (not release) and updates the number immediately; the server corrects any difference.
 $('polish').addEventListener('pointerdown', (e) => {
   if (!S) return;
   send({ type: 'click' });
@@ -84,43 +134,74 @@ $('polish').addEventListener('pointerdown', (e) => {
   pop(e, '+' + fmt(gain));
 });
 $('buildings').onclick = (e) => { const k = e.target.closest('button')?.dataset.buy; if (k) send({ type: 'buy', key: k }); };
+$('chatform').onsubmit = (e) => { e.preventDefault(); send({ type: 'chat', text: $('chat').value }); $('chat').value = ''; };
 $('elementPick').onclick = (e) => { const el = e.target.closest('[data-el]')?.dataset.el; if (el) send({ type: 'element', el }); };
+
 $('pouch').onclick = (e) => {
-  const id = +e.target.closest('[data-rune]')?.dataset.rune;
-  if (!id) return;
-  selectedRune = selectedRune === id ? null : id;
-  render();
+  const id = +e.target.closest('[data-rune]')?.dataset.rune; if (!id) return;
+  held = held?.kind === 'rune' && held.id === id ? null : { kind: 'rune', id }; focusId = null; render();
+};
+$('storage').onclick = (e) => {
+  const b = e.target.closest('button');
+  if (b?.dataset.fuse) { const [type, lvl] = b.dataset.fuse.split(':'); send({ type: 'fuseComps', compType: type, lvl: +lvl }); return; }
+  const id = +e.target.closest('[data-item]')?.dataset.item; if (!id) return;
+  held = held?.kind === 'comp' && held.id === id ? null : { kind: 'comp', id, rot: 0 }; focusId = null; render();
 };
 $('pouchActions').onclick = (e) => {
   const b = e.target.closest('button'); if (!b) return;
-  if (b.dataset.merge) { const [el, rank] = b.dataset.merge.split(':'); send({ type: 'merge', el, rank: +rank }); }
-  if (b.dataset.give) { send({ type: 'give', runeId: selectedRune, to: b.dataset.give }); selectedRune = null; }
+  if (b.dataset.fuse) { const [el, rank] = b.dataset.fuse.split(':'); send({ type: 'fuseRunes', el, rank: +rank }); }
+  if (b.dataset.give) { send({ type: 'give', [held.kind === 'rune' ? 'runeId' : 'itemId']: held.id, to: b.dataset.give }); held = null; }
+  if (b.dataset.act === 'rotate') rotateHeld();
+  if (b.dataset.act === 'drop') { held = null; render(); }
 };
-$('engineGrid').onclick = (e) => {
-  const s = e.target.closest('[data-socket]'); if (!s) return;
-  const i = +s.dataset.socket;
-  if (selectedRune) { send({ type: 'place', runeId: selectedRune, socket: i }); selectedRune = null; }
-  else if (S.engine.grid[i]) send({ type: 'unsocket', socket: i });
+$('expand').onclick = (e) => { const d = e.target.closest('button')?.dataset.expand; if (d) send({ type: 'expand', dir: d }); };
+$('focus').onclick = (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  const it = findItem(focusId); if (!it) return;
+  if (b.dataset.act === 'store') { send({ type: 'store', itemId: it.id }); focusId = null; }
+  if (b.dataset.act === 'move') { held = { kind: 'comp', id: it.id, rot: it.rot }; focusId = null; render(); }
+  if (b.dataset.act === 'rot') send({ type: 'place', itemId: it.id, x: it.x, y: it.y, rot: it.rot + 1 });
+  if (b.dataset.unsocket) send({ type: 'unsocket', itemId: it.id, s: +b.dataset.unsocket });
+  if (b.dataset.act === 'close') { focusId = null; render(); }
 };
-// Live preview: with a rune selected, hovering a socket shows exactly what Resonance you'd get.
-$('engineGrid').addEventListener('pointerover', (e) => { const s = e.target.closest('[data-socket]'); hoverSocket = s ? +s.dataset.socket : null; renderPreview(); });
-$('engineGrid').addEventListener('pointerleave', () => { hoverSocket = null; renderPreview(); });
-$('chatform').onsubmit = (e) => { e.preventDefault(); send({ type: 'chat', text: $('chat').value }); $('chat').value = ''; };
+function rotateHeld() { if (held?.kind === 'comp') { held.rot = (held.rot + 1) % 4; render(); } }
+document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT') return;
+  if (e.key === 'r' || e.key === 'R') rotateHeld();
+  if (e.key === 'Escape') { held = null; focusId = null; render(); }
+});
+$('machineGrid').addEventListener('pointerover', (e) => {
+  const c = e.target.closest('[data-x]'); hoverCell = c ? [+c.dataset.x, +c.dataset.y] : null; renderMachine();
+});
+$('machineGrid').addEventListener('pointerleave', () => { hoverCell = null; renderMachine(); });
+$('machineGrid').onclick = (e) => {
+  const c = e.target.closest('[data-x]'); if (!c || !S) return;
+  const x = +c.dataset.x, y = +c.dataset.y;
+  if (held?.kind === 'comp') { send({ type: 'place', itemId: held.id, x, y, rot: held.rot }); held = null; return; }
+  const sock = socketAt(x, y);
+  if (held?.kind === 'rune') {
+    if (sock && sock.s >= 0) { send({ type: 'socket', itemId: sock.item.id, s: sock.s, runeId: held.id }); held = null; }
+    else toast('Drop runes onto a socket (the circles).');
+    return;
+  }
+  focusId = sock ? sock.item.id : null; render();
+};
+
 function riftClick(e) {
   const b = e.target.closest('button'); if (!b) return;
-  if (b.dataset.act === 'dismissRun') { localStorage.dismissedRun = S.lastRun.at; return render(); }
-  if (b.dataset.act === 'boon') send({ type: 'boon', key: b.dataset.key });
-  else if (b.dataset.act === 'tier') { selectedTier = +b.dataset.tier; render(); }
-  else if (b.dataset.act === 'startRun') send({ type: 'startRun', tier: selectedTier });
-  else send({ type: b.dataset.act });
+  if (b.dataset.act === 'tier') { selectedTier = +b.dataset.tier; render(); }
+  else if (b.dataset.act === 'dive') send({ type: 'dive', tier: selectedTier });
+  else if (b.dataset.act === 'recall') send({ type: 'recall' });
+  else if (b.dataset.act === 'dismiss') { localStorage.seenDive = S.you.lastDive.at; render(); }
 }
 $('rift').onclick = riftClick;
 $('riftBottom').onclick = riftClick;
+$('rift').addEventListener('change', (e) => { if (e.target.id === 'recallSel') send({ type: 'recallPct', v: +e.target.value }); });
 
-// ---------------------------------------------------------------- arena (skill combat)
-// Targets are spawned locally for each player; the server is told how accurate each hit was.
+// ---------------------------------------------------------------- arena (overcharge while your machine fights)
 const arena = $('arena');
 let arenaMode = 'off', arenaCfg = null, targets = [], combo = 0, spawnTimer = null;
+const seenLinks = new Set(), shownResults = new Set();
 function setArena(mode, msg, cfg) {
   if (cfg) arenaCfg = cfg;
   arena.classList.toggle('hidden', mode === 'off');
@@ -130,32 +211,24 @@ function setArena(mode, msg, cfg) {
   arenaMode = mode;
   clearTimeout(spawnTimer);
   targets.forEach((t) => { clearTimeout(t.timer); t.el.remove(); });
-  targets = [];
-  seenLinks.clear();
+  targets = []; seenLinks.clear();
   combo = 0; showCombo();
   if (mode === 'fight') spawnTimer = setTimeout(spawnLoop, 400);
 }
 function spawnLoop() {
   if (arenaMode !== 'fight') return;
-  if (targets.length < arenaCfg.max) spawnTarget();
+  if (targets.filter((t) => !t.link).length < arenaCfg.max) spawnTarget();
   spawnTimer = setTimeout(spawnLoop, arenaCfg.spawnMs * (0.7 + Math.random() * 0.6));
 }
-// Linked targets: one on your screen and one on a friend's. Hit them at the same moment for a huge strike.
-const seenLinks = new Set(), shownResults = new Set();
 function syncLinks() {
-  if (arenaMode !== 'fight' || !S.run) return;
-  for (const l of S.run.links) {
-    if (seenLinks.has(l.id)) continue;
-    seenLinks.add(l.id);
-    spawnTarget({ link: l });
-  }
-  for (const res of S.run.linkResults) {
+  if (arenaMode !== 'fight' || !S.dive) return;
+  for (const l of S.dive.links) { if (!seenLinks.has(l.id)) { seenLinks.add(l.id); spawnTarget({ link: l }); } }
+  for (const res of S.dive.linkResults) {
     if (shownResults.has(res.id)) continue;
     shownResults.add(res.id);
-    if (!seenLinks.has(res.id)) continue; // from before this screen was open
+    if (!seenLinks.has(res.id)) continue;
     const rect = arena.getBoundingClientRect();
-    pop({ clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 },
-      res.ok ? `⚡ LINKED with ${res.partner}! ×3` : `link with ${res.partner} broke`, res.ok ? 'linked' : 'miss');
+    pop({ clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 }, res.ok ? `⚡ LINKED with ${res.partner}!` : `link with ${res.partner} broke`, res.ok ? 'linked' : 'miss');
   }
 }
 function spawnTarget(opts = {}) {
@@ -172,7 +245,7 @@ function spawnTarget(opts = {}) {
   if (link) el.innerHTML = `<span>⚡ ${esc(link.partner)}</span>`;
   arena.appendChild(el);
   const t = { x, y, r, el, link };
-  t.timer = setTimeout(() => { // too slow: the target fades (and a normal target breaks the combo)
+  t.timer = setTimeout(() => {
     targets = targets.filter((o) => o !== t);
     el.classList.add('expired'); setTimeout(() => el.remove(), 250);
     if (!link && combo) { combo = 0; showCombo('lost'); }
@@ -191,54 +264,38 @@ arena.addEventListener('pointerdown', (e) => {
   const px = e.clientX - rect.left, py = e.clientY - rect.top;
   let best = null, bestD = Infinity;
   for (const t of targets) { const d = Math.hypot(t.x - px, t.y - py); if (d <= t.r && d < bestD) { best = t; bestD = d; } }
-  if (!best) { // clicked empty sky: a missed attack
-    pop(e, 'miss', 'miss');
-    if (combo) { combo = 0; showCombo('lost'); }
-    return;
-  }
+  if (!best) { pop(e, 'miss', 'miss'); if (combo) { combo = 0; showCombo('lost'); } return; }
   clearTimeout(best.timer);
   targets = targets.filter((t) => t !== best);
   best.el.classList.add('popped'); setTimeout(() => best.el.remove(), 200);
   const acc = 1 - bestD / best.r;
-  if (best.link) {
-    send({ type: 'linkHit', id: best.link.id, acc, combo });
-    combo++; showCombo();
-    pop(e, `⚡ now ${best.link.partner}!`, 'linked');
-    return;
-  }
+  if (best.link) { send({ type: 'linkHit', id: best.link.id, acc }); pop(e, `⚡ now ${best.link.partner}!`, 'linked'); return; }
   send({ type: 'hit', acc, combo });
   combo++; showCombo();
-  pop(e, acc >= 0.85 ? 'BULLSEYE!' : acc >= 0.45 ? 'Hit' : 'Graze', acc >= 0.85 ? 'crit' : 'hit');
-  const en = document.querySelector('#rift .enemy');
-  if (en) { en.classList.remove('struck'); void en.offsetWidth; en.classList.add('struck'); }
+  pop(e, acc >= 0.85 ? 'OVERCHARGE!' : '+charge', acc >= 0.85 ? 'crit' : 'hit');
 });
 
 // ---------------------------------------------------------------- render
-const EL = Engine.ELEMENTS;
-const runeChip = (r, extra = '') => `<span class="rune el-${r.el} ${extra}" data-rune="${r.id}" title="${EL[r.el].name} ${Engine.ROMAN[r.rank]}">${EL[r.el].icon}<sub>${Engine.ROMAN[r.rank]}</sub></span>`;
-const runeList = (rs) => rs.length ? rs.map((r) => runeChip(r)).join('') : '<span class="dim">none yet</span>';
-
 function render() {
   if (!S) return;
-  const now = Date.now();
   $('dust').textContent = fmt(S.dust);
   $('dps').textContent = fmt(S.dps);
   $('harmony').textContent = '×' + S.harmony;
   $('tierhead').textContent = S.tiers.max;
-  $('reshead').textContent = fmt(S.engine.resonance);
+  $('reshead').textContent = fmt(S.totalResonance);
   $('clickval').textContent = `+${fmt(S.clickPower)} per click`;
 
   const item = (u) => `<div class="item"><div>${esc(u.name)} <span class="dim">(${u.count})</span><small>${esc(u.desc)}</small></div>
     <button data-buy="${u.key}" ${S.dust < u.cost ? 'disabled' : ''}>${fmt(u.cost)} ✧</button></div>`;
   setHTML($('buildings'), S.buildings.map(item).join('') + item(S.cloth) +
-    (S.engine.resonance ? `<p class="hint">The Star Engine's Resonance boosts all production: ×${(1 + S.engine.resonance / 100).toFixed(2)}</p>` : ''));
+    (S.totalResonance ? `<p class="hint">Your crew's machines boost all production: ×${(1 + S.totalResonance / 200).toFixed(2)}</p>` : ''));
 
-  renderRift(now);
-  renderEngine();
+  renderRift();
+  renderMachine();
   syncLinks();
 
   setHTML($('players'), S.players.map((p) => `<div><span class="${p.online ? 'on' : 'off'}">●</span> ${p.el ? `<span class="elc el-${p.el}">${EL[p.el].icon}</span> ` : ''}${esc(p.name)}
-    <span class="dim">· ${p.runes} rune${p.runes === 1 ? '' : 's'} · ${fmt(p.contributed)} clicked</span></div>`).join(''));
+    <span class="dim">· Resonance ${fmt(p.resonance)}${p.status ? ` · <span class="warn">${p.status}</span>` : ''}</span></div>`).join(''));
 
   const feed = $('feed');
   const atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 30;
@@ -246,111 +303,157 @@ function render() {
   if (atBottom) feed.scrollTop = feed.scrollHeight;
 }
 
-function renderEngine() {
-  const E = S.engine, me = S.you;
-  $('engineBox').classList.toggle('hidden', !!(S.run && S.run.inRun)); // keep the fight screen uncluttered
-  setHTML($('elementPick'), me.el ? '' : `<div class="pick"><b>Choose your element.</b> Most runes you find will match it, so the crew needs each other's runes to build a great Engine.
-    <div class="els">${Engine.ELEMENT_KEYS.map((k) => `<button data-el="${k}" class="el-${k}"><b>${EL[k].icon} ${EL[k].name}</b><small>${esc(EL[k].rule)}</small></button>`).join('')}</div></div>`);
-  const t = S.tiers;
-  const pct = Math.max(0, Math.min(100, 100 * (E.resonance - t.curReq) / (t.nextReq - t.curReq)));
-  setHTML($('engineHead'), `<div class="row" style="justify-content:space-between"><span>Resonance <b class="gold">${fmt(E.resonance)}</b></span>
-    <span class="dim">Tier ${t.next} unlocks at ${fmt(t.nextReq)}</span></div>
-    <div class="bar"><div style="width:${pct}%;background:var(--violet)"></div></div>`);
-  if (selectedRune && !me.pouch.some((r) => r.id === selectedRune)) selectedRune = null;
-  $('engineGrid').style.gridTemplateColumns = `repeat(${E.size}, 64px)`;
-  setHTML($('engineGrid'), E.grid.map((g, i) => `<div class="socket ${g ? 'el-' + g.el + ' full' : ''} ${selectedRune ? 'target-ok' : ''}" data-socket="${i}">${g
-    ? `<span class="ri">${EL[g.el].icon}</span><span class="rr">${Engine.ROMAN[g.rank]}</span><span class="rv">${fmt(E.values[i])}</span>` : ''}</div>`).join(''));
-  setHTML($('pouch'), me.pouch.length ? [...me.pouch].sort((a, b) => a.el.localeCompare(b.el) || b.rank - a.rank)
-    .map((r) => runeChip(r, r.id === selectedRune ? 'sel' : '')).join('') : '<span class="dim">No runes yet. Open the Rift to find some!</span>');
-  // Fuse suggestions (3 identical → next rank) and gifting the selected rune
-  const groups = {};
-  for (const r of me.pouch) { const k = `${r.el}:${r.rank}`; groups[k] = (groups[k] || 0) + 1; }
-  const merges = Object.entries(groups).filter(([k, n]) => n >= 3 && +k.split(':')[1] < Engine.MAX_RANK)
-    .map(([k]) => { const [el, rank] = k.split(':'); return `<button data-merge="${k}" class="small">Fuse 3× ${EL[el].icon} ${Engine.ROMAN[rank]} → ${Engine.ROMAN[+rank + 1]}</button>`; });
-  const others = S.players.filter((p) => p.ref !== me.ref);
-  const gives = selectedRune && others.length ? `<span class="dim">Give it to:</span> ${others.map((p) => `<button data-give="${p.ref}" class="small ghost">${p.el ? EL[p.el].icon + ' ' : ''}${esc(p.name)}</button>`).join('')}` : '';
-  setHTML($('pouchActions'), `<div class="row">${merges.join('')}</div>${gives ? `<div class="row">${gives}</div>` : ''}
-    <p class="hint">${selectedRune ? 'Now click a socket to place it (it swaps with whatever is there).' : 'Click a rune to select it, then click a socket. Click a placed rune to take it back.'}</p>`);
-  setHTML($('rules'), Engine.ELEMENT_KEYS.map((k) => `<div><span class="elc el-${k}">${EL[k].icon} ${EL[k].name}</span>: ${esc(EL[k].rule)}</div>`).join(''));
-  renderPreview();
+function statLine(label, now, after, f = fmt1) {
+  const d = after == null ? 0 : after - now;
+  return `<div class="stat"><span>${label}</span><b>${f(now)}</b>${Math.abs(d) > 1e-6 ? `<i class="${d > 0 ? 'up' : 'down'}">${d > 0 ? '+' : ''}${f(d)}</i>` : ''}</div>`;
 }
 
-function renderPreview() {
-  const E = S && S.engine;
-  let txt = '&nbsp;';
-  if (E && selectedRune && hoverSocket != null) {
-    const r = S.you.pouch.find((q) => q.id === selectedRune);
-    if (r) {
-      const grid = E.grid.map((g) => g && { el: g.el, rank: g.rank });
-      grid[hoverSocket] = { el: r.el, rank: r.rank };
-      const after = Engine.score(grid, E.size).total, d = after - E.resonance;
-      txt = `Placing ${EL[r.el].icon} ${Engine.ROMAN[r.rank]} here: Resonance <b class="${d >= 0 ? 'gold' : 'warn'}">${fmt(after)} (${d >= 0 ? '+' : ''}${d})</b>`;
+function renderMachine() {
+  const Y = me(), m = Y.machine;
+  setHTML($('elementPick'), Y.el ? '' : `<div class="pick"><b>Choose your element to get your machine.</b> Most runes you find will match it,
+    so you'll want to trade with your crew for the others.
+    <div class="els">${Engine.ELEMENT_KEYS.map((k) => `<button data-el="${k}" class="el-${k}"><b>${EL[k].icon} ${EL[k].name}</b></button>`).join('')}</div></div>`);
+  $('machineWrap').classList.toggle('hidden', !m);
+  if (!m) return;
+  if (held && !findItem(held.id) && !Y.pouch.some((r) => r.id === held.id)) held = null;
+  if (focusId && !m.items.some((it) => it.id === focusId)) focusId = null;
+  const locked = Y.diving;
+  $('machineBox').classList.toggle('locked', locked);
+
+  // grid squares → item ids
+  const occ = Array(m.w * m.h).fill(null), cellInfo = {};
+  for (const it of m.items) Engine.cellsFor(it.type, it.rot).forEach(([cx, cy], ci) => {
+    const k = (it.y + cy) * m.w + it.x + cx; occ[k] = it.id; cellInfo[k] = { it, ci };
+  });
+  // ghost for a held component
+  const ghost = new Set(); let ghostOk = false;
+  if (held?.kind === 'comp' && hoverCell) {
+    const trial = trialMachine();
+    ghostOk = !!trial && Engine.fits(trial.m);
+    Engine.cellsFor(findItem(held.id).type, held.rot).forEach(([cx, cy]) => ghost.add(`${hoverCell[0] + cx},${hoverCell[1] + cy}`));
+  }
+  const stats = Engine.stats(m);
+  let html = '';
+  for (let y = 0; y < m.h; y++) for (let x = 0; x < m.w; x++) {
+    const k = y * m.w + x, info = cellInfo[k];
+    const cls = ['cell'];
+    let inner = '', style = '';
+    if (info) {
+      const { it, ci } = info, def = COMP[it.type];
+      style = `--cc:${def.color}`;
+      cls.push('filled');
+      if (it.id === focusId) cls.push('focused');
+      const same = (dx, dy) => { const nx = x + dx, ny = y + dy; return nx >= 0 && ny >= 0 && nx < m.w && ny < m.h && occ[ny * m.w + nx] === it.id; };
+      if (!same(0, -1)) cls.push('bt'); if (!same(0, 1)) cls.push('bb'); if (!same(-1, 0)) cls.push('bl'); if (!same(1, 0)) cls.push('br');
+      const s = def.sockets.findIndex((sk) => sk.c === ci);
+      if (s >= 0) {
+        const r = it.runes[s], want = def.sockets[s].el;
+        inner = r ? `<span class="sock full el-${r.el} ${r.el === want ? '' : 'mismatch'}">${EL[r.el].icon}<sub>${R[r.rank]}</sub></span>`
+          : `<span class="sock el-${want}" title="wants ${EL[want].name}">${EL[want].icon}</span>`;
+      }
+      if (ci === 0) inner += `<span class="cname">${esc(def.name.split(' ').pop())}${it.lvl > 1 ? ' +' + (it.lvl - 1) : ''}</span><span class="cpow">${fmt1(10 * (stats.power[it.id] || 0))}</span>`;
     }
+    if (ghost.has(`${x},${y}`)) cls.push(ghostOk ? 'ghost-ok' : 'ghost-bad');
+    if (held?.kind === 'rune' && info && COMP[info.it.type].sockets.some((sk) => sk.c === info.ci)) cls.push('droppable');
+    html += `<div class="${cls.join(' ')}" style="${style}" data-x="${x}" data-y="${y}">${inner}</div>`;
   }
-  if ($('preview').innerHTML !== txt) $('preview').innerHTML = txt;
+  $('machineGrid').style.gridTemplateColumns = `repeat(${m.w}, 52px)`;
+  setHTML($('machineGrid'), html);
+  setHTML($('expand'), locked ? '' : `<button class="small ghost" data-expand="w" ${m.w >= Y.maxW || S.dust < Y.expandCost ? 'disabled' : ''}>+ column</button>
+    <button class="small ghost" data-expand="h" ${m.h >= Y.maxH || S.dust < Y.expandCost ? 'disabled' : ''}>+ row</button>
+    <span class="dim">${fmt(Y.expandCost)} ✧</span>`);
+
+  // stats with a live preview of whatever you're about to do
+  const trial = trialMachine();
+  const after = trial && (trial.ok || Engine.fits(trial.m)) ? Engine.stats(trial.m) : null;
+  setHTML($('stats'), `<div class="statbox">${statLine('Damage/s', stats.dmg, after?.dmg)}${statLine('HP', stats.hp, after?.hp)}
+    ${statLine('Armor', stats.armor, after?.armor)}${statLine('Repair/s', stats.regen, after?.regen)}
+    ${statLine('Extra runes', stats.loot * 100, after && after.loot * 100, (v) => Math.round(v) + '%')}
+    ${statLine('Resonance', stats.resonance, after?.resonance, fmt)}
+    <div class="dim tiny">Tier ${S.tiers.max + 1} unlocks at ${fmt(S.tiers.nextReq)}</div></div>`);
+
+  // inspecting an installed component
+  const f = focusId && m.items.find((it) => it.id === focusId);
+  setHTML($('focus'), f && !locked ? `<div class="focusbox"><b>${compTitle(f)}</b> <span class="dim">· power ${fmt1(10 * (stats.power[f.id] || 0))}</span><br>
+    <small>${esc(COMP[f.type].desc)}</small><div class="row">
+    ${COMP[f.type].sockets.map((sk, s) => f.runes[s] ? `<button class="small ghost" data-unsocket="${s}">Remove ${EL[f.runes[s].el].icon} ${R[f.runes[s].rank]}</button>` : `<span class="dim small">empty ${EL[sk.el].icon} socket</span>`).join(' ')}
+    </div><div class="row"><button class="small" data-act="move">Move</button><button class="small" data-act="rot">Rotate</button>
+    <button class="small" data-act="store">Put in storage</button><button class="small ghost" data-act="close">✕</button></div></div>` : '');
+
+  setHTML($('helpline'), locked ? '🔒 Your machine is in the Rift. Recall it to make changes.'
+    : held?.kind === 'comp' ? 'Click a square to place it (top-left corner). Press <b>R</b> to rotate, <b>Esc</b> to cancel.'
+      : held?.kind === 'rune' ? 'Click a glowing socket to put the rune in. It swaps with any rune already there.'
+        : 'Click a rune or a stored component to pick it up. Click a component in the machine to inspect it.');
+
+  // storage
+  const groups = {};
+  for (const it of Y.storage) { const k = `${it.type}:${it.lvl}`; groups[k] = (groups[k] || 0) + 1; }
+  setHTML($('storage'), (Y.storage.length ? Y.storage.map((it) => `<div class="card ${held?.kind === 'comp' && held.id === it.id ? 'sel' : ''}" data-item="${it.id}">
+      ${miniShape(it.type, held?.id === it.id ? held.rot : 0)}<div><b>${compTitle(it)}</b><small>${esc(COMP[it.type].desc)}</small>
+      <small>Sockets: ${COMP[it.type].sockets.map((sk) => EL[sk.el].icon).join(' ')}</small></div></div>`).join('')
+    : '<span class="dim">Empty. Components drop in the Rift (bosses always drop one).</span>') +
+    `<div class="row">${Object.entries(groups).filter(([k, n]) => n >= 3 && +k.split(':')[1] < Engine.MAX_LEVEL)
+      .map(([k]) => `<button class="small" data-fuse="${k}">Forge 3× ${COMP[k.split(':')[0]].name} → +${k.split(':')[1]}</button>`).join('')}</div>`);
+
+  // runes
+  setHTML($('pouch'), Y.pouch.length ? [...Y.pouch].sort((a, b) => a.el.localeCompare(b.el) || b.rank - a.rank)
+    .map((r) => runeChip(r, held?.kind === 'rune' && held.id === r.id ? 'sel' : '')).join('') : '<span class="dim">No loose runes.</span>');
+  const rg = {};
+  for (const r of Y.pouch) { const k = `${r.el}:${r.rank}`; rg[k] = (rg[k] || 0) + 1; }
+  const fuses = Object.entries(rg).filter(([k, n]) => n >= 3 && +k.split(':')[1] < Engine.MAX_RANK)
+    .map(([k]) => { const [el, rank] = k.split(':'); return `<button data-fuse="${k}" class="small">Fuse 3× ${EL[el].icon} ${R[rank]} → ${R[+rank + 1]}</button>`; });
+  const others = S.players.filter((p) => p.ref !== Y.ref);
+  const canGive = held && others.length && (held.kind === 'rune' || Y.storage.some((it) => it.id === held.id));
+  setHTML($('pouchActions'), `<div class="row">${fuses.join('')}</div>
+    ${held ? `<div class="row">${held.kind === 'comp' ? '<button class="small" data-act="rotate">Rotate (R)</button>' : ''}<button class="small ghost" data-act="drop">Put it down (Esc)</button>
+      ${canGive ? `<span class="dim">Give it to:</span> ${others.map((p) => `<button data-give="${p.ref}" class="small ghost">${p.el ? EL[p.el].icon + ' ' : ''}${esc(p.name)}</button>`).join('')}` : ''}</div>` : ''}`);
+
+  setHTML($('compList'), Engine.COMPONENT_KEYS.map((k) => `<div class="row">${miniShape(k)} <span><b>${COMP[k].name}</b>: ${esc(COMP[k].desc)}</span></div>`).join(''));
 }
 
-function renderRift(now) {
-  const R = S.run;
+function renderRift() {
+  const D = S.dive, Y = me();
   const bottom = (html) => setHTML($('riftBottom'), html);
+  const units = (D) => `<div class="units">${D.units.map((u) => `<div class="unit ${u.status}"><span>${u.el ? `<span class="elc el-${u.el}">${EL[u.el].icon}</span> ` : ''}<b>${esc(u.name)}</b>${u.me ? ' (you)' : ''}</span>
+    <span class="dim">${u.status === 'fighting' ? `${fmt(u.dmg * (1 + u.charge))} dmg/s${u.charge > 0.05 ? ` <span class="gold">⚡×${(1 + u.charge).toFixed(1)}</span>` : ''} · ${u.runes} rune${u.runes === 1 ? '' : 's'}${u.comps ? ` · ${u.comps} part${u.comps === 1 ? '' : 's'}` : ''}` : u.status === 'recalled' ? 'came home' : 'destroyed'}</span>
+    ${u.status === 'fighting' ? `<div class="bar party"><div style="width:${100 * u.hp / u.maxHp}%"></div></div>` : ''}</div>`).join('')}</div>`;
 
-  if (!R && S.lastRun && localStorage.dismissedRun != S.lastRun.at && Date.now() - (runEndSeen[S.lastRun.at] ??= Date.now()) < 30 * 60 * 1000) {
-    // Run summary: the arena stays where it was (inert), so leftover clicks land on nothing.
-    const L = S.lastRun, mine = L.mine || { found: 0, kept: 0 };
-    const armed = Date.now() - runEndSeen[L.at] > 1500;
-    setHTML($('rift'), `<h2>The Rift · Tier ${L.tier}</h2>
-      <div class="row"><b>Floor ${L.floor}</b> · you found ${mine.found} rune${mine.found === 1 ? '' : 's'}</div>
-      <div>${L.retreated ? 'The party made it out' : 'Party HP 0'}</div><div class="bar party"><div style="width:${L.retreated ? 100 : 0}%"></div></div>
-      <div class="enemy"><div class="name" style="color:${L.retreated ? '#7ee787' : 'var(--red)'}">${L.retreated ? '🏳 Retreated safely' : '💀 The party fell'}</div>
-        <div class="dim">${L.retreated ? 'from' : 'on'} floor ${L.floor}</div>
-        <div class="bar"><div></div></div><div>&nbsp;</div></div>`);
-    setArena('inert', `You brought home <b>${mine.kept}</b> rune${mine.kept === 1 ? '' : 's'}`);
-    bottom(`<p class="hint">They're in your pouch. Fuse them, give them to friends, and set them in the Star Engine.</p>
-      <div class="row"><button data-act="dismissRun" ${armed ? '' : 'disabled'}>${armed ? 'Back to the observatory' : 'Catching your breath…'}</button></div>`);
+  // what happened on your last dive (until you dismiss it)
+  const L = Y.lastDive;
+  const summary = L && localStorage.seenDive != L.at && !Y.diving ? `<div class="summary ${L.destroyed ? 'bad' : 'good'}">
+      <b>${L.destroyed ? `💥 Your machine was destroyed on floor ${L.floor}` : `🏳 Your machine came home from floor ${L.floor}`}</b> (Tier ${L.tier})<br>
+      Brought back ${L.runes} rune${L.runes === 1 ? '' : 's'}${L.comps.length ? ` and ${L.comps.map(esc).join(', ')}` : ''}.
+      ${L.destroyed ? `<br>Lost: ${L.lostItems.length ? L.lostItems.map(esc).join(', ') : 'no components'}${L.lostRunes.length ? `, ${L.lostRunes.length} socketed rune(s)` : ''}.` : ''}
+      <button class="small ghost" data-act="dismiss">OK</button></div>` : '';
+
+  if (Y.diving) {
+    const e = D.enemy;
+    setHTML($('rift'), `<h2>The Rift · Tier ${D.tier} · Floor ${D.floor}</h2>
+      ${e ? `<div class="enemy ${e.boss ? 'boss' : ''}"><div class="name">${e.boss ? '☠ ' : ''}${esc(e.name)}</div>
+        <div class="bar hp"><div style="width:${100 * e.hp / e.maxHp}%"></div></div><div class="dim">${fmt(e.hp)} / ${fmt(e.maxHp)} · hits for ${e.atk}</div></div>`
+        : '<div class="enemy"><div class="name" style="color:#7ee787">Descending…</div><div class="bar"><div></div></div><div>&nbsp;</div></div>'}
+      ${units(D)}`);
+    setArena('fight', '', D.arena);
+    bottom(`<p class="hint">Your machine fights on its own. Click targets to <b>overcharge</b> it (dead centre charges most), and hit <b>⚡ linked targets</b> together with a crewmate for a burst.
+      It comes home by itself at ${Math.round(Y.recallPct * 100)}% HP.</p><div class="row"><button data-act="recall">🏳 Recall now</button></div>`);
     return;
   }
-  if (!R) {
-    setArena('off');
-    bottom('');
-    const t = S.tiers.max;
-    if (!selectedTier || selectedTier > t) selectedTier = t;
-    const cost = S.tiers.costs[selectedTier - 1];
-    setHTML($('rift'), `<h2>The Rift</h2>
-      <p>Spend stardust to tear open the Rift. Everyone online dives in together. <b>Hit targets dead centre</b> for big damage;
-      missing or letting one fade breaks your combo. With friends, <b>⚡ linked targets</b> appear: hit yours at the same moment as your partner for a triple strike.</p>
-      <p>Every runner finds their own <b>runes</b>, mostly of their element. Higher tiers drop stronger runes. <b>Retreat</b> between floors to keep them all; <b>fall</b> and you keep half.</p>
+  // Just came home: keep the arena where it was (inert) for a moment so leftover clicks land on nothing.
+  if (L && (diveEndSeen[L.at] ??= Date.now()) > Date.now() - 2500) setArena('inert', L.destroyed ? '💥 Destroyed!' : '🏳 Home safe');
+  else setArena('off');
+  const t = S.tiers.max;
+  if (!selectedTier || selectedTier > t) selectedTier = t;
+  const tier = D ? D.tier : selectedTier;
+  const cost = S.tiers.costs[tier - 1];
+  setHTML($('rift'), `<h2>The Rift</h2>${summary}
+    ${D ? `<p><b>A Tier ${D.tier} dive is underway</b> (floor ${D.floor}).</p>${units(D)}` : `<p>Send your machine into the Rift. It fights on its own, floor by floor, and keeps going while you're away.
+      Every kill drops runes (mostly your element) and sometimes components; bosses always drop a component.
+      If it's destroyed, it keeps only half of what it found and each installed part has a 30% chance to be lost.</p>
       <div class="row tiers">${Array.from({ length: t }, (_, i) => `<button data-act="tier" data-tier="${i + 1}" class="small ${i + 1 === selectedTier ? 'on-tier' : 'ghost'}">Tier ${i + 1}</button>`).join('')}
-        <span class="dim">Tier ${t + 1} unlocks at Resonance ${fmt(S.tiers.nextReq)}</span></div>
-      <button class="big" data-act="startRun" ${S.dust < cost ? 'disabled' : ''}>Open a Tier ${selectedTier} Rift (${fmt(cost)} ✧)</button>
-      <p class="hint">If the whole party goes offline, the Rift freezes until someone returns. Best floor so far: ${S.bestFloor || '—'}.</p>`);
-    return;
-  }
-  const members = `<div class="members"><h3>Party</h3>${R.members.map((m) => `<div><span class="${m.online ? 'on' : 'off'}">●</span> ${m.el ? `<span class="elc el-${m.el}">${EL[m.el].icon}</span> ` : ''}<b>${esc(m.name)}</b> · ${fmt(m.dmg)} dmg · ${m.runes} rune${m.runes === 1 ? '' : 's'} ${m.picking ? '<span class="dim">(choosing…)</span>' : ''}<br><span class="dim">${m.boons.map(esc).join(', ') || 'no boons yet'}</span></div>`).join('')}</div>`;
-  const top = `<h2>The Rift · Tier ${R.tier}</h2><div class="row"><b>Floor ${R.floor}</b> · your runes: ${runeList(R.myLoot)}</div>
-    <div>Party HP ${Math.ceil(R.partyHp)}/${R.partyMaxHp}</div><div class="bar party"><div style="width:${100 * Math.max(0, R.partyHp) / R.partyMaxHp}%"></div></div>`;
-  if (!R.inRun) {
-    setHTML($('rift'), top + `<p>Your crew is in the Rift.</p>`);
-    setArena('off');
-    bottom(`<button class="big" data-act="joinRun">Jump in!</button>${members}`);
-    return;
-  }
-  if (R.phase === 'fight') {
-    const e = R.enemy;
-    setHTML($('rift'), top + `<div class="enemy ${e.boss ? 'boss' : ''}"><div class="name">${e.boss ? '☠ ' : ''}${esc(e.name)}</div>
-      <div class="dim">hits the party for ${e.atk} every 3s</div>
-      <div class="bar hp"><div style="width:${100 * e.hp / e.maxHp}%"></div></div><div>${fmt(e.hp)} / ${fmt(e.maxHp)}</div></div>`);
-    setArena('fight', '', R.arena);
-    bottom(`<p class="hint">Click targets as close to the centre as you can. Bullseyes crit; combos stack up to ×3. Harmony applies when you strike together.</p>${members}`);
-    return;
-  }
-  // Draft: the arena goes inert in place; boons sit below it and unlock after a moment.
-  const armed = now >= R.boonsArmAt;
-  setHTML($('rift'), top + `<div class="enemy"><div class="name" style="color:#7ee787">Floor ${R.floor} cleared!</div>
-      <div class="dim">Next floor in ${secs(R.draftEndsAt - now)}s</div>
-      <div class="bar"><div></div></div><div>&nbsp;</div></div>`);
-  setArena('inert', R.myOffer ? (armed ? '↓ Choose a boon below ↓' : 'Steady…') : 'Waiting for the others to choose…');
-  bottom((R.myOffer ? `<div class="boons">${R.myOffer.map((b) => `<button data-act="boon" data-key="${b.key}" ${armed ? '' : 'disabled'}><b>${esc(b.name)}</b><small>${esc(b.desc)}</small></button>`).join('')}</div>` : '') +
-    `<div class="row"><button data-act="retreat" class="ghost">🏳 Retreat now, keeping every rune</button></div>${members}`);
+        <span class="dim">Tier ${t + 1} unlocks when a machine reaches Resonance ${fmt(S.tiers.nextReq)}</span></div>`}
+    <div class="row"><label class="dim">Come home at <select id="recallSel" data-value="${Y.recallPct}">${[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7].map((v) => `<option value="${v}" ${Math.abs(v - Y.recallPct) < 0.01 ? 'selected' : ''}>${Math.round(v * 100)}% HP</option>`).join('')}</select></label></div>
+    <button class="big" data-act="dive" ${!Y.machine || S.dust < cost ? 'disabled' : ''}>${D ? `Join the Tier ${D.tier} dive` : `Send your machine into Tier ${tier}`} (${fmt(cost)} ✧)</button>`);
+  bottom('');
 }
 
-setInterval(render, 500); // keep countdowns ticking between server updates
+setInterval(render, 500);

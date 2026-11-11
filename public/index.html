@@ -10,7 +10,7 @@
   <div id="join" class="join">
     <h1>✦ Starwright ✦</h1>
     <p>A shared observatory for you and your friends. It keeps making stardust while you're gone.
-      Spend it to open the Rift, fight for runes together, and tune the Star Engine to climb to harder Rifts.</p>
+      Build machines from components and runes, and send them into the Rift together.</p>
     <input id="name" placeholder="Your name" maxlength="20">
     <input id="room" placeholder="Crew code (share this with friends)" maxlength="32">
     <button id="go">Enter the observatory</button>
@@ -20,7 +20,7 @@
     <header>
       <div><b id="dust">0</b> stardust <span class="dim">(<span id="dps">0</span>/s)</span></div>
       <div>Rift Tier <b id="tierhead">1</b></div>
-      <div>Resonance <b id="reshead">0</b></div>
+      <div>Crew Resonance <b id="reshead">0</b></div>
       <div>Harmony <b id="harmony">×1</b></div>
       <div class="dim" id="roomlabel"></div>
     </header>
@@ -37,18 +37,30 @@
         <div id="rift"></div>
         <div id="arena" class="hidden"><div id="arenaMsg"></div><div id="combo"></div></div>
         <div id="riftBottom"></div>
-        <div id="engineBox">
-          <h2>Star Engine</h2>
+        <div id="machineBox">
+          <h2>Your Machine</h2>
           <div id="elementPick"></div>
-          <div id="engineHead"></div>
-          <div id="engineGrid"></div>
-          <div id="preview" class="hint">&nbsp;</div>
-          <h3>Your runes</h3>
+          <div id="machineWrap">
+            <div>
+              <div id="machineGrid"></div>
+              <div id="expand" class="row"></div>
+            </div>
+            <div id="stats"></div>
+          </div>
+          <div id="focus"></div>
+          <div id="helpline" class="hint"></div>
+          <h3>Storage <span class="dim">(components)</span></h3>
+          <div id="storage"></div>
+          <h3>Runes</h3>
           <div id="pouch"></div>
           <div id="pouchActions"></div>
-          <details class="rules"><summary>How runes interact</summary><div id="rules"></div>
-            <p class="hint">"Touching" means directly up, down, left or right. A rank II rune is worth twice a rank I, rank III four times, and so on.
-            Resonance boosts stardust production and your Rift damage, and unlocks harder Rift Tiers with better runes.</p></details>
+          <details class="rules"><summary>How machines work</summary>
+            <p class="hint">Components take up space in your machine's grid. Each has sockets (the circles) that want a certain element:
+            a matching rune powers it fully, a different element only 40%, and higher-rank runes are worth more (rank II = 2×, III = 4×…).
+            Many components boost the components they touch, so placement matters. Three identical components in storage
+            forge into a stronger one. <b>Resonance</b> is your machine's total power: it unlocks harder Rift Tiers.
+            If your machine is destroyed in the Rift, each installed component (and socketed rune) has a 30% chance to be lost.</p>
+            <div id="compList"></div></details>
         </div>
       </section>
 
