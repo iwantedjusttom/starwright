@@ -111,3 +111,8 @@ button.big { touch-action: manipulation; }
 @keyframes tfade { to { transform:scale(.4); opacity:0; } }
 .pop.crit { color:var(--gold); font-size:24px; }
 .pop.miss { color:var(--dim); font-size:16px; }
+
+.levelup { display:flex; justify-content:space-between; align-items:center; gap:.5em; margin-top:.5em; padding:.4em .5em;
+  border:1px solid var(--gold); border-radius:8px; background:#2b2410; color:var(--gold); animation: glow 1.6s ease-in-out infinite; }
+.levelup button { border-color:var(--gold); white-space:nowrap; }
+@keyframes glow { 50% { box-shadow: 0 0 10px rgba(242,193,78,.45); } }

@@ -201,7 +201,15 @@ test('crew XP levels the crew up and unlocks things in order', () => {
   r.dust = 1e9;
   assert.match(g.act(r, 'a', { type: 'buy', key: 'chart' }, on, 0), /crew level 2/);
   for (let i = 0; i < 60; i++) g.act(r, 'a', { type: 'buy', key: 'telescope' }, on, 0); // 60 × 1 XP
+  assert.strictEqual(r.crewLevel, 1, 'XP alone only makes the crew ready');
+  assert.ok(g.view(r, 'a', on, 0).crew.ready);
+  assert.match(r.feed.at(-2).text + r.feed.at(-1).text, /ready for level 2/);
+  const keep = r.dust; r.dust = 100;
+  assert.match(g.act(r, 'a', { type: 'levelUp' }, on, 0), /stardust/);
+  r.dust = keep;
+  assert.strictEqual(g.act(r, 'a', { type: 'levelUp' }, on, 0), null);
   assert.strictEqual(r.crewLevel, 2);
+  assert.strictEqual(r.xp, 0);
   assert.strictEqual(g.act(r, 'a', { type: 'buy', key: 'chart' }, on, 0), null);
   assert.match(r.feed.find((f) => f.text.includes('level 2')).text, /Star Chart/);
   const v = g.view(r, 'a', on, 0);

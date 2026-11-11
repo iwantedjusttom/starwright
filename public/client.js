@@ -85,6 +85,7 @@ $('polish').addEventListener('pointerdown', (e) => {
   pop(e, '+' + fmt(gain));
 });
 $('upgrades').onclick = (e) => { const k = e.target.closest('button')?.dataset.buy; if (k) send({ type: 'buy', key: k }); };
+$('crew').onclick = (e) => { if (e.target.closest('[data-act="levelUp"]')) send({ type: 'levelUp' }); };
 $('perks').onclick = (e) => { const k = e.target.closest('button')?.dataset.perk; if (k) send({ type: 'perk', key: k }); };
 $('lenses').onclick = (e) => { const k = e.target.closest('.lens')?.dataset.lens; if (k) send({ type: 'attune', lens: k }); };
 $('submit').onclick = () => send({ type: 'submit' });
@@ -219,12 +220,16 @@ function render() {
   const C = S.crew;
   const nextU = C.unlocks.find((u) => !u.done);
   $('crewlvl').textContent = C.level;
-  setHTML($('crew'), `<div class="row" style="margin:0"><b>Crew level ${C.level}</b><span class="dim">${fmt(C.xp)} / ${fmt(C.next)} XP</span></div>
-    <div class="bar"><div style="width:${100 * C.xp / C.next}%;background:var(--gold)"></div></div>
+  setHTML($('crew'), `<div class="row" style="margin:0"><b>Crew level ${C.level}</b><span class="dim">${fmt(Math.min(C.xp, C.next))} / ${fmt(C.next)} XP${C.xp > C.next ? ` (+${fmt(C.xp - C.next)} banked)` : ''}</span></div>
+    <div class="bar"><div style="width:${Math.min(100, 100 * C.xp / C.next)}%;background:var(--gold)"></div></div>
+    ${C.ready ? `<div class="levelup"><span>✨ Ready for level ${C.level + 1}!</span>
+      <button data-act="levelUp" ${S.dust < C.cost ? 'disabled' : ''}>Level up · ${fmt(C.cost)} ✧</button></div>`
+      : `<small>Fill the bar with XP, then fund the level with ${fmt(C.cost)} stardust.</small>`}
     <small>${nextU ? `Next at level ${nextU.level}: <b>${esc(nextU.what)}</b>` : 'Every unlock found… for now.'}</small>
     <details><summary>Roadmap</summary>${C.unlocks.map((u) => `<div class="${u.done ? '' : 'dim'}">${u.done ? '✅' : '🔒'} Lv ${u.level}: ${esc(u.what)}</div>`).join('')}
       <div class="dim">More to discover…</div>
-      <p class="hint">Crew XP comes from building, crafting, relighting constellations, clearing Rift floors and stardust milestones.</p></details>`);
+      <p class="hint">Crew XP comes from building, crafting, relighting constellations, clearing Rift floors and stardust milestones.
+      When the bar is full, anyone can spend stardust to level the crew up. Extra XP is banked toward the next level.</p></details>`);
   setHTML($('upgrades'), S.upgrades.map((u) => u.locked
     ? `<div class="item locked"><div>🔒 ${esc(u.name)}<small>Unlocks at crew level ${u.locked}</small></div></div>`
     : `<div class="item"><div>${esc(u.name)} <span class="dim">(${u.count})</span><small>${esc(u.desc)}</small></div>

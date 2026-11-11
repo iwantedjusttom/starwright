@@ -25,6 +25,9 @@ const UNLOCKS = [
 ];
 const UNLOCK_LEVEL = Object.fromEntries(UNLOCKS.flatMap((u) => u.keys.map((k) => [k, u.level])));
 const xpToNext = (lvl) => Math.round(60 * Math.pow(1.6, lvl - 1));
+// Hybrid levelling: XP makes the crew *ready*, then someone spends stardust to actually level up.
+const levelCost = (lvl) => Math.round(LEVEL_COST_BASE * Math.pow(LEVEL_COST_GROWTH, lvl - 1));
+const LEVEL_COST_BASE = 2500, LEVEL_COST_GROWTH = 7;
 const XP = { building: 1, machine: 4, conduit: 8, constellation: 60, gate: 40, floor: 5, boss: 30, lens: 3, cell: 5, perk: 10, starsteel: 6, gear: 15, milestone: 25 };
 
 // The Rift Gate is built once, in stages. Each stage needs stardust AND something stardust can't buy directly.
@@ -228,13 +231,27 @@ const unlocked = (room, key) => room.crewLevel >= (UNLOCK_LEVEL[key] || 1);
 const lockMsg = (key) => `Unlocks at crew level ${UNLOCK_LEVEL[key]}.`;
 
 function gainXp(room, amount, now) {
-  room.xp += amount;
-  while (room.xp >= xpToNext(room.crewLevel)) {
-    room.xp -= xpToNext(room.crewLevel);
-    room.crewLevel++;
-    const u = UNLOCKS.find((x) => x.level === room.crewLevel);
-    log(room, `🎉 The crew reached level ${room.crewLevel}!${u ? ` Unlocked: ${u.what}.` : ''}`, now);
+  const wasReady = room.xp >= xpToNext(room.crewLevel);
+  room.xp += amount; // keeps accumulating past the threshold, so nothing is wasted while you save up
+  if (!wasReady && room.xp >= xpToNext(room.crewLevel)) {
+    const u = UNLOCKS.find((x) => x.level === room.crewLevel + 1);
+    log(room, `✨ The crew is ready for level ${room.crewLevel + 1}! Fund it for ${levelCost(room.crewLevel).toLocaleString()} stardust${u ? ` to unlock ${u.what}` : ''}.`, now);
   }
+}
+
+function levelUp(room, me, now) {
+  const need = xpToNext(room.crewLevel), c = levelCost(room.crewLevel);
+  if (room.xp < need) return `The crew needs ${Math.ceil(need - room.xp)} more XP first.`;
+  if (room.dust < c) return `Levelling up costs ${c.toLocaleString()} stardust.`;
+  room.dust -= c; room.xp -= need; room.crewLevel++;
+  const u = UNLOCKS.find((x) => x.level === room.crewLevel);
+  log(room, `🎉 ${me.name} funded the expansion: the crew reached level ${room.crewLevel}!${u ? ` Unlocked: ${u.what}.` : ''}`, now);
+  return null;
+}
+
+// Free automatic levelling, only used when converting worlds from before crew levels existed.
+function grantLevels(room) {
+  while (room.xp >= xpToNext(room.crewLevel)) { room.xp -= xpToNext(room.crewLevel); room.crewLevel++; }
 }
 
 // Fill in fields added after a world was first saved.
@@ -259,8 +276,9 @@ function normalize(room) {
     const buildings = Object.values(room.upgrades).reduce((a, b) => a + b, 0);
     const machines = Object.values(w.machines).reduce((a, b) => a + b, 0);
     room.xp = 0; room.crewLevel = 1; room.milestone = 0;
-    gainXp(room, buildings * XP.building + machines * XP.machine + room.level * XP.constellation + room.gate * XP.gate
-      + (room.bestFloor || 0) * 8 + Math.floor(w.installed) * XP.lens, room.lastTick);
+    room.xp = buildings * XP.building + machines * XP.machine + room.level * XP.constellation + room.gate * XP.gate
+      + (room.bestFloor || 0) * 8 + Math.floor(w.installed) * XP.lens;
+    grantLevels(room);
     room.mult = 1 + CONSTELLATION_BONUS * room.level;
     // Never lock a crew out of something it already owns.
     const owned = [...Object.keys(room.upgrades).filter((k) => room.upgrades[k] > 0),
@@ -586,6 +604,7 @@ function act(room, pid, msg, online, now = Date.now()) {
       }
       return 'Unknown lens use.';
     }
+    case 'levelUp': return levelUp(room, me, now);
     case 'gate': {
       const st = GATE_STAGES[room.gate];
       if (!st) return 'The Gate is already complete.';
@@ -719,7 +738,8 @@ function view(room, pid, online, now = Date.now()) {
     upgrades: Object.entries(UPGRADES).map(([key, d]) => ({ key, name: d.name, desc: d.desc, count: room.upgrades[key], cost: cost(d, room.upgrades[key]),
       locked: unlocked(room, key) ? null : UNLOCK_LEVEL[key] })),
     crew: {
-      level: room.crewLevel, xp: room.xp, next: xpToNext(room.crewLevel),
+      level: room.crewLevel, xp: room.xp, next: xpToNext(room.crewLevel), cost: levelCost(room.crewLevel),
+      ready: room.xp >= xpToNext(room.crewLevel),
       unlocks: UNLOCKS.map((u) => ({ level: u.level, what: u.what, done: room.crewLevel >= u.level })),
     },
     locks: { workshop: unlocked(room, 'workshop') ? null : UNLOCK_LEVEL.workshop, gate: unlocked(room, 'gate') ? null : UNLOCK_LEVEL.gate, gear: unlocked(room, 'gear') ? null : UNLOCK_LEVEL.gear },
