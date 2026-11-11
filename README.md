@@ -6,7 +6,10 @@ A cooperative multiplayer idle game for a small group of friends (1–5 players)
 
 1. **Your machine:** a grid of shaped components powered by runes in their sockets. Matching elements power a
    component fully, wrong ones at 40%, and higher-rank runes are worth more. Many components boost what they touch.
-   Every component from the Rift is rolled: rarity, sockets and random modifiers. Your machine's total power is its
+   Every component from the Rift is rolled, Borderlands-style: a **random shape** (1–6 squares), **random sockets**
+   (1–3, on random squares, each wanting a random element), a rarity, **buffs**, and sometimes **curses** (rarer items
+   roll bigger buffs and curses more often). The runes you socket together create **element combos**: Sun+Ember =
+   Solar Flare, Sun+Moon = Twilight, Tide+Ember = Steam, Moon+Void = Eclipse, Tide+Void = Abyssal Tide, all one element = Pure. Your machine's total power is its
    **Resonance**, which unlocks harder **Rift Tiers**.
 2. **The Rift:** send your machine in (friends can join the same dive). It fights on its own and comes home at the HP
    you choose. While it fights you can click targets to **overcharge** it, click red shields to **block** incoming

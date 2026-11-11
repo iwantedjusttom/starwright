@@ -54,7 +54,7 @@ const newItem = (room, type, lvl = 1) => ({ id: nextId(room), type, lvl, x: 0, y
 // A random drop from the Rift: rarity, socket elements and modifiers are rolled (deeper tiers and bosses roll better).
 const dropItem = (room, tier, boss) => Object.assign(Engine.rollItem(pick(COMPONENT_KEYS), Math.random, tier - 1 + (boss ? 2 : 0)),
   { id: nextId(room), x: 0, y: 0, rot: 0, runes: null });
-const withRunes = (it) => Object.assign(it, { runes: COMPONENTS[it.type].sockets.map(() => null) });
+const withRunes = (it) => Object.assign(it, { runes: Engine.socketsOf(it).map(() => null) });
 const RARITY_NAMES = Object.fromEntries(Object.entries(Engine.RARITIES).map(([k, r]) => [k, r.name]));
 
 // A working starter machine (runes not yet socketed — that's the first thing to do).
@@ -224,7 +224,7 @@ function leaveDive(room, dive, pid, destroyed, t) {
   const lostItems = [], lostRunes = [];
   if (destroyed && p.machine) {
     p.machine.items = p.machine.items.filter((it) => {
-      if (Math.random() < LOSE_ITEM_CHANCE) { lostItems.push(compName(it)); return false; }
+      if (Math.random() < LOSE_ITEM_CHANCE * (Engine.modVal(it, 'fragile') || 1)) { lostItems.push(compName(it)); return false; }
       it.runes = it.runes.map((r) => { if (r && Math.random() < LOSE_ITEM_CHANCE) { lostRunes.push(runeName(r)); return null; } return r; });
       return true;
     });

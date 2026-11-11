@@ -29,21 +29,21 @@ test('shapes rotate, and pieces cannot overlap or leave the grid', () => {
 
 test('sockets: matching runes give full power, wrong elements 40%, higher ranks more', () => {
   const s = (runes) => Engine.stats({ w: 3, h: 1, items: [item(1, 'lance', 0, 0, 0, runes)] }).dmg;
-  assert.strictEqual(s([rune('sun'), rune('ember'), rune('sun')]), 6);
-  assert.ok(Math.abs(s([rune('moon'), rune('moon'), rune('moon')]) - 6 * 0.4) < 1e-9);
-  assert.strictEqual(s([rune('sun', 2), rune('ember', 2), rune('sun', 2)]), 12);
+  assert.ok(Math.abs(s([rune('sun'), rune('ember'), rune('sun')]) - 6 * 1.4) < 1e-9, 'Sun + Ember socketed together: Solar Flare');
+  assert.ok(Math.abs(s([rune('moon'), rune('moon'), rune('moon')]) - 6 * 0.4 * 1.3) < 1e-9, 'wrong element at 40%, but three of a kind is Pure');
+  assert.ok(Math.abs(s([rune('sun', 2), rune('ember', 2), rune('sun', 2)]) - 12 * 1.4) < 1e-9);
   assert.strictEqual(s([null, null, null]), 0);
 });
 
 test('components boost what they touch: capacitor → weapons, coils chain, void core → everything (but costs HP)', () => {
   const lance = item(1, 'lance', 0, 0, 0, [rune('sun'), rune('ember'), rune('sun')]);
   const cap = item(2, 'capacitor', 0, 1, 0, [rune('sun')]);
-  assert.ok(Math.abs(Engine.stats({ w: 3, h: 2, items: [lance, cap] }).dmg - 6 * 1.4) < 1e-9);
+  assert.ok(Math.abs(Engine.stats({ w: 3, h: 2, items: [lance, cap] }).dmg - 6 * 1.4 * 1.4) < 1e-9); // capacitor × Solar Flare
   const c1 = item(3, 'coil', 0, 0, 0, [rune('ember')]), c2 = item(4, 'coil', 1, 0, 0, [rune('ember')]);
   assert.ok(Math.abs(Engine.stats({ w: 2, h: 1, items: [c1, c2] }).dmg - 9) < 1e-9);
   const core = item(5, 'core', 0, 1, 0, [rune('void')]);
   const s = Engine.stats({ w: 3, h: 3, items: [lance, core] });
-  assert.ok(Math.abs(s.dmg - 6 * 1.35) < 1e-9);
+  assert.ok(Math.abs(s.dmg - 6 * 1.4 * 1.35) < 1e-9);
   assert.strictEqual(s.hp, 85);
   assert.ok(s.resonance > 0);
 });
@@ -221,18 +221,22 @@ test('every kill drops Essence; diving is free; destroyed machines keep half', (
 test('rolled components: rarities, random sockets and modifiers that change stats', () => {
   let s = 7; const rng = () => (s = (s * 16807) % 2147483647) / 2147483647;
   const counts = {};
-  for (let i = 0; i < 3000; i++) { const it = Engine.rollItem('lance', rng, 0); counts[it.rarity] = (counts[it.rarity] || 0) + 1; assert.strictEqual(it.mods.length, Engine.RARITIES[it.rarity].mods); }
+  for (let i = 0; i < 3000; i++) {
+    const it = Engine.rollItem('lance', rng, 0); counts[it.rarity] = (counts[it.rarity] || 0) + 1;
+    assert.strictEqual(it.mods.filter((m) => !Engine.MODS[m.k].bad).length, Engine.RARITIES[it.rarity].mods);
+    assert.ok(it.shape.length >= 1 && it.shape.length <= 6 && it.sockets.length >= 1 && it.sockets.length <= Math.min(3, it.shape.length));
+  }
   assert.ok(counts.common > counts.uncommon && counts.uncommon > counts.rare && counts.rare > counts.epic);
   const deep = {}; for (let i = 0; i < 3000; i++) { const it = Engine.rollItem('lance', rng, 8); deep[it.rarity] = (deep[it.rarity] || 0) + 1; }
   assert.ok((deep.legendary || 0) > (counts.legendary || 0) * 5, 'deeper tiers roll rarer loot');
   // modifiers
   const base = (mods, runes, sockEls) => Engine.stats({ w: 3, h: 1, items: [{ ...item(1, 'lance', 0, 0, 0, runes), mods, sockEls }] });
   const full = [rune('sun'), rune('ember'), rune('sun')];
-  assert.ok(Math.abs(base([{ k: 'overcharged', v: 20 }], full).dmg - 7.2) < 1e-9);
-  assert.ok(Math.abs(base([{ k: 'titan', v: 50 }], full).bossDmg - 3) < 1e-9);
+  assert.ok(Math.abs(base([{ k: 'overcharged', v: 20 }], full).dmg - 7.2 * 1.4) < 1e-9);
+  assert.ok(Math.abs(base([{ k: 'titan', v: 50 }], full).bossDmg - 3 * 1.4) < 1e-9);
   const wrong = [rune('moon'), rune('moon'), rune('moon')];
-  assert.ok(Math.abs(base([{ k: 'harmony', v: 80 }], wrong).dmg - 6 * 0.8) < 1e-9);
-  assert.strictEqual(base([], wrong, ['moon', 'moon', 'moon']).dmg, 6, 'an item whose sockets rolled Moon wants Moon');
+  assert.ok(Math.abs(base([{ k: 'harmony', v: 80 }], wrong).dmg - 6 * 0.8 * 1.3) < 1e-9);
+  assert.ok(Math.abs(base([], wrong, ['moon', 'moon', 'moon']).dmg - 6 * 1.3) < 1e-9, 'an item whose sockets rolled Moon wants Moon (and three Moons are Pure)');
   assert.strictEqual(Engine.itemName({ type: 'lance', mods: [{ k: 'volatile', v: 30 }, { k: 'titan', v: 50 }] }), 'Volatile Prism Lance of the Titan');
 });
 
@@ -245,7 +249,7 @@ test('boss kills drop rolled components', () => {
   r.dive.enemy.hp = 1;
   g.tick(r, 1750, solo);
   const c = r.dive.units.a.loot.comps[0];
-  assert.ok(c && Engine.RARITIES[c.rarity] && Array.isArray(c.mods) && c.runes.length === Engine.COMPONENTS[c.type].sockets.length);
+  assert.ok(c && Engine.RARITIES[c.rarity] && Array.isArray(c.mods) && c.runes.length === c.sockets.length && c.shape.length >= 1);
 });
 
 test('formation: machines diving together hit harder than the same machines alone', () => {
@@ -287,4 +291,33 @@ test('blocking: the targeted player can stop an incoming attack; a perfect block
   const inc2 = g.view(r, 'a', solo, 0).dive.incoming;
   g.act(r, 'a', { type: 'block', id: inc2.id, acc: 1 }, solo, r.dive.enemy.nextAttackAt - 5000);
   assert.strictEqual(r.dive.enemy.blocked, null);
+});
+
+test('random shapes fit and rotate; curses hurt; element combos change what a component does', () => {
+  let s = 3; const rng = () => (s = (s * 16807) % 2147483647) / 2147483647;
+  for (let i = 0; i < 200; i++) {
+    const shape = Engine.randomShape(1 + (i % 6), rng);
+    const key = new Set(shape.map(([x, y]) => x + ',' + y));
+    assert.strictEqual(key.size, shape.length, 'no duplicate squares');
+    // connected: every square except the first touches an earlier one
+    const seen = new Set([shape[0].join(',')]); let grew = true;
+    while (grew) { grew = false; for (const [x, y] of shape) if (!seen.has(x + ',' + y) && [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => seen.has((x + dx) + ',' + (y + dy)))) { seen.add(x + ',' + y); grew = true; } }
+    assert.strictEqual(seen.size, shape.length, 'connected');
+  }
+  const L = { id: 1, type: 'plate', lvl: 1, x: 0, y: 0, rot: 1, shape: [[0, 0], [1, 0], [2, 0], [2, 1]], sockets: [{ c: 0, el: 'sun' }], runes: [rune('sun')], mods: [] };
+  assert.deepStrictEqual(Engine.cellsFor(L, 1), [[1, 0], [1, 1], [1, 2], [0, 2]]);
+  assert.ok(Engine.fits({ w: 2, h: 3, items: [L] }));
+  // a bigger shape is stronger than the classic 2-square Sunplate
+  assert.ok(Engine.stats({ w: 2, h: 3, items: [L] }).hp > 135);
+  // curses
+  const lance = (mods, runes = [rune('sun'), rune('moon'), rune('sun')]) => Engine.stats({ w: 3, h: 1, items: [item(1, 'lance', 0, 0, 0, runes), ].map((it) => ({ ...it, mods })) });
+  assert.strictEqual(lance([{ k: 'brittle', v: 10 }]).hp, 90);
+  assert.ok(lance([{ k: 'unstable', v: 20 }]).dmg < lance([]).dmg);
+  // combos depend on the runes actually socketed
+  assert.deepStrictEqual(Engine.combosOf({ runes: [rune('tide'), rune('ember')] }), ['steam']);
+  assert.deepStrictEqual(Engine.combosOf({ runes: [rune('moon'), rune('void')] }), ['eclipse']);
+  assert.deepStrictEqual(Engine.combosOf({ runes: [rune('void'), rune('void')] }), ['pure']);
+  assert.deepStrictEqual(Engine.combosOf({ runes: [rune('void'), null] }), []);
+  const steamPump = Engine.stats({ w: 1, h: 2, items: [{ ...item(1, 'pump', 0, 0, 0, [rune('tide'), rune('ember')]) }] });
+  assert.ok(steamPump.regen > 2, 'Steam adds repair');
 });

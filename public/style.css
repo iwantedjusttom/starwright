@@ -177,3 +177,16 @@ button.small { padding:.25em .55em; font-size:12px; }
 
 main.machines { grid-template-columns: 1fr 1.5fr 0.85fr; }
 @media (max-width: 1100px) { main.machines { grid-template-columns: 1fr; } }
+
+/* clearer sockets and loot */
+#machineGrid .cell.sockcell { background: color-mix(in srgb, var(--ec) 30%, color-mix(in srgb, var(--cc) 22%, #121830)); }
+.sock { position:relative; width:34px; height:34px; font-size:18px; border-width:2px; opacity:.9; }
+.sock .want { position:absolute; bottom:-2px; left:50%; transform:translateX(-50%); font-size:8px; letter-spacing:.02em; color:var(--ec); white-space:nowrap; }
+.takes { display:block; margin:.25em 0; font-size:12px; color:var(--dim); }
+.elpill { display:inline-block; margin-left:.3em; padding:0 .45em; border-radius:999px; border:1px solid var(--ec); color:var(--ec); background:color-mix(in srgb, var(--ec) 15%, transparent); font-weight:600; }
+.mods li.buff { color:#9be9a8; } .mods li.curse { color:#ff8a8a; }
+.combo { font-size:12px; color:var(--dim); margin:.2em 0; }
+.combo.on { color:var(--gold); }
+.mini i { width:16px; height:16px; }
+.mini i b { inset:1px; display:flex; align-items:center; justify-content:center; font-size:10px; font-weight:bold; color:#0b0e1a; border-radius:50%; }
+.mods { list-style:none; padding-left:.2em; }

@@ -81,19 +81,29 @@ const R = Engine.ROMAN;
 const runeChip = (r, extra = '') => `<span class="rune el-${r.el} ${extra}" data-rune="${r.id}" title="${EL[r.el].name} ${R[r.rank]}">${EL[r.el].icon}<sub>${R[r.rank]}</sub></span>`;
 const RAR = Engine.RARITIES;
 const compTitle = (it) => `<span style="color:${RAR[it.rarity || 'common'].color}">${esc(Engine.itemName(it))}</span>${it.lvl > 1 ? ` <span class="gold">+${it.lvl - 1}</span>` : ''}`;
-const modList = (it) => (it.mods || []).map((m) => `<li>${esc(Engine.MODS[m.k].text(m.v))}</li>`).join('');
+const modList = (it) => (it.mods || []).map((m) => `<li class="${Engine.MODS[m.k].bad ? 'curse' : 'buff'}">${Engine.MODS[m.k].bad ? '▼' : '▲'} ${esc(Engine.MODS[m.k].text(m.v))}</li>`).join('');
+// "Takes: ☀ Sun · ♨ Ember" — what runes a component wants, as coloured labels
+const takes = (it) => `<span class="takes">Takes ${Engine.socketsOf(it).map((sk) => `<span class="elpill el-${sk.el}">${EL[sk.el].icon} ${EL[sk.el].name}</span>`).join('')}</span>`;
+// Element combos: which ones are on right now, and which this component's sockets could make
+function comboLine(it) {
+  const active = Engine.combosOf(it), possible = Engine.possibleCombos(it).filter((k) => !active.includes(k));
+  const C = Engine.COMBOS;
+  const label = (k) => C[k].els ? C[k].els.map((e) => EL[e].icon).join('+') : 'same element';
+  return (active.length ? `<div class="combo on">${active.map((k) => `✦ <b>${C[k].name}</b>: ${esc(C[k].text)}`).join('<br>')}</div>` : '') +
+    (possible.length ? `<div class="combo">${possible.map((k) => `◇ ${C[k].name} (${label(k)}): ${esc(C[k].text)}`).join('<br>')}</div>` : '');
+}
 const costLabel = (c) => `${fmt(c.essence)} ✦`;
 const canAfford = (c) => (S.you.essence || 0) >= c.essence;
 const me = () => S.you;
 const allItems = () => [...(me().machine?.items || []), ...me().storage];
 const findItem = (id) => allItems().find((it) => it.id === id);
 function miniShape(type, rot = 0, it = null) {
-  const cells = Engine.cellsFor(type, rot), w = Math.max(...cells.map((c) => c[0])) + 1, h = Math.max(...cells.map((c) => c[1])) + 1;
+  const cells = Engine.cellsFor(it || type, rot), w = Math.max(...cells.map((c) => c[0])) + 1, h = Math.max(...cells.map((c) => c[1])) + 1;
   const socketAt = new Map((it ? Engine.socketsOf(it) : COMP[type].sockets).map((s) => [s.c, s.el]));
-  let out = `<span class="mini" style="grid-template-columns:repeat(${w},12px)">`;
+  let out = `<span class="mini" style="grid-template-columns:repeat(${w},16px)">`;
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
     const i = cells.findIndex(([cx, cy]) => cx === x && cy === y);
-    out += i < 0 ? '<i></i>' : `<i class="on" style="background:${COMP[type].color}">${socketAt.has(i) ? `<b class="el-${socketAt.get(i)}"></b>` : ''}</i>`;
+    out += i < 0 ? '<i></i>' : `<i class="on" style="background:${COMP[type].color}">${socketAt.has(i) ? `<b class="el-${socketAt.get(i)}">${EL[socketAt.get(i)].icon}</b>` : ''}</i>`;
   }
   return out + '</span>';
 }
@@ -119,7 +129,7 @@ function trialMachine() {
 function socketAt(x, y) {
   const m = me().machine;
   for (const it of m.items) {
-    const cells = Engine.cellsFor(it.type, it.rot);
+    const cells = Engine.cellsFor(it, it.rot);
     const ci = cells.findIndex(([cx, cy]) => it.x + cx === x && it.y + cy === y);
     if (ci < 0) continue;
     const s = Engine.socketsOf(it).findIndex((sk) => sk.c === ci);
@@ -325,7 +335,7 @@ function renderMachine() {
 
   // grid squares → item ids
   const occ = Array(m.w * m.h).fill(null), cellInfo = {};
-  for (const it of m.items) Engine.cellsFor(it.type, it.rot).forEach(([cx, cy], ci) => {
+  for (const it of m.items) Engine.cellsFor(it, it.rot).forEach(([cx, cy], ci) => {
     const k = (it.y + cy) * m.w + it.x + cx; occ[k] = it.id; cellInfo[k] = { it, ci };
   });
   // ghost for a held component
@@ -333,7 +343,7 @@ function renderMachine() {
   if (held?.kind === 'comp' && hoverCell) {
     const trial = trialMachine();
     ghostOk = !!trial && Engine.fits(trial.m);
-    Engine.cellsFor(findItem(held.id).type, held.rot).forEach(([cx, cy]) => ghost.add(`${hoverCell[0] + cx},${hoverCell[1] + cy}`));
+    Engine.cellsFor(findItem(held.id), held.rot).forEach(([cx, cy]) => ghost.add(`${hoverCell[0] + cx},${hoverCell[1] + cy}`));
   }
   const stats = Engine.stats(m);
   let html = '';
@@ -352,8 +362,9 @@ function renderMachine() {
       const s = socks.findIndex((sk) => sk.c === ci);
       if (s >= 0) {
         const r = it.runes[s], want = socks[s].el;
-        inner = r ? `<span class="sock full el-${r.el} ${r.el === want ? '' : 'mismatch'}">${EL[r.el].icon}<sub>${R[r.rank]}</sub></span>`
-          : `<span class="sock el-${want}" title="wants ${EL[want].name}">${EL[want].icon}</span>`;
+        cls.push('sockcell', 'el-' + want);
+        inner = r ? `<span class="sock full el-${r.el} ${r.el === want ? '' : 'mismatch'}" title="${EL[r.el].name} ${R[r.rank]} in a ${EL[want].name} socket">${EL[r.el].icon}<sub>${R[r.rank]}</sub>${r.el === want ? '' : `<span class="want el-${want}">wants ${EL[want].name}</span>`}</span>`
+          : `<span class="sock el-${want}" title="wants a ${EL[want].name} rune">${EL[want].icon}<span class="want">${EL[want].name}</span></span>`;
       }
       if (ci === 0) inner += `<span class="cname" style="color:${RAR[it.rarity || 'common'].color}">${esc(def.name.split(' ').pop())}${it.lvl > 1 ? ' +' + (it.lvl - 1) : ''}</span><span class="cpow">${fmt1(10 * (stats.power[it.id] || 0))}</span>`;
     }
@@ -380,7 +391,7 @@ function renderMachine() {
   const f = focusId && m.items.find((it) => it.id === focusId);
   setHTML($('focus'), f && !locked ? `<div class="focusbox" style="border-color:${RAR[f.rarity || 'common'].color}"><b>${compTitle(f)}</b>
     <span class="dim">· ${RAR[f.rarity || 'common'].name} · power ${fmt1(10 * (stats.power[f.id] || 0))}</span><br>
-    <small>${esc(COMP[f.type].desc)}</small>${f.mods?.length ? `<ul class="mods">${modList(f)}</ul>` : ''}<div class="row">
+    <small>${esc(COMP[f.type].desc)}</small>${takes(f)}${f.mods?.length ? `<ul class="mods">${modList(f)}</ul>` : ''}${comboLine(f)}<div class="row">
     ${Engine.socketsOf(f).map((sk, s) => f.runes[s] ? `<button class="small ghost" data-unsocket="${s}">Remove ${EL[f.runes[s].el].icon} ${R[f.runes[s].rank]}</button>` : `<span class="dim small">empty ${EL[sk.el].icon} socket</span>`).join(' ')}
     </div><div class="row">${f.lvl < Engine.MAX_LEVEL ? `<button class="small" data-act="upgrade" ${canAfford(Engine.upgradeCost(f)) ? '' : 'disabled'}>⬆ Upgrade to +${f.lvl} (${costLabel(Engine.upgradeCost(f))})</button>` : '<span class="dim small">Max level</span>'}
     <button class="small" data-act="move">Move</button><button class="small" data-act="rot">Rotate</button>
@@ -395,7 +406,7 @@ function renderMachine() {
   setHTML($('storage'), `<div class="dim small">Essence: <b class="gold">${fmt(Y.essence || 0)} ✦</b> (salvage spare runes and components to get more)</div>` +
     (Y.storage.length ? Y.storage.map((it) => `<div class="card ${held?.kind === 'comp' && held.id === it.id ? 'sel' : ''}" data-item="${it.id}" style="border-color:${RAR[it.rarity || 'common'].color}55">
       ${miniShape(it.type, held?.id === it.id ? held.rot : 0, it)}<div style="flex:1"><b>${compTitle(it)}</b> <span class="dim small">${RAR[it.rarity || 'common'].name}</span>
-      <small>${esc(COMP[it.type].desc)} Sockets: ${Engine.socketsOf(it).map((sk) => `<span class="elc el-${sk.el}">${EL[sk.el].icon}</span>`).join(' ')}</small>
+      <small>${esc(COMP[it.type].desc)} ${Engine.shapeOf(it).length} square${Engine.shapeOf(it).length === 1 ? '' : 's'}.</small>${takes(it)}${comboLine(it)}
       ${it.mods?.length ? `<ul class="mods">${modList(it)}</ul>` : ''}</div>
       <div class="cardbtns">${it.lvl < Engine.MAX_LEVEL ? `<button class="small ghost" data-upgrade="${it.id}" ${canAfford(Engine.upgradeCost(it)) ? '' : 'disabled'}>⬆ ${costLabel(Engine.upgradeCost(it))}</button>` : ''}
       <button class="small ghost" data-salvage="${it.id}">♻ +${Engine.itemEssence(it)} ✦</button></div></div>`).join('')
