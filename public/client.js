@@ -108,6 +108,42 @@ function miniShape(type, rot = 0, it = null) {
   return out + '</span>';
 }
 
+// A large drawing of a component's shape: every square, with socket squares coloured and named by the element they want.
+function bigShape(it, rot = 0) {
+  const cells = Engine.cellsFor(it, rot), w = Math.max(...cells.map((c) => c[0])) + 1, h = Math.max(...cells.map((c) => c[1])) + 1;
+  const socks = Engine.socketsOf(it), sockAt = new Map(socks.map((s, i) => [s.c, i]));
+  let out = `<div class="bigshape" style="grid-template-columns:repeat(${w},46px)">`;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const ci = cells.findIndex(([cx, cy]) => cx === x && cy === y);
+    if (ci < 0) { out += '<i></i>'; continue; }
+    const si = sockAt.get(ci);
+    if (si === undefined) { out += `<i class="sq" style="--cc:${COMP[it.type].color}"></i>`; continue; }
+    const el = socks[si].el, r = it.runes?.[si];
+    out += `<i class="sq sk el-${el}" style="--cc:${COMP[it.type].color}"><b>${EL[el].icon}</b><span>${r ? `${EL[r.el].icon}${R[r.rank]}` : EL[el].name}</span></i>`;
+  }
+  return out + '</div>';
+}
+// What a component does with its neighbours, in words.
+const NEIGHBOUR_RULE = {
+  capacitor: 'Boosts every <b>weapon</b> it touches (+40% × its own strength). Does nothing for non-weapons.',
+  core: 'Boosts <b>everything</b> it touches (+35% × its own strength), but the whole machine loses 15% HP.',
+  coil: 'Each Ember Coil it touches gets ×1.5 (and boosts it back). Clump them together.',
+  lash: 'Gets +25% for every <b>empty</b> grid square next to it. Give it open space.',
+};
+function neighbourRule(it) {
+  // Modifiers and combos can give any component a neighbour effect, even when its type has none.
+  const extra = [];
+  if (Engine.modVal(it, 'resonance')) extra.push(`<b>of Resonance</b>: +${Engine.modVal(it, 'resonance')}% to everything it touches`);
+  if (Engine.modVal(it, 'draining')) extra.push(`<span class="warn"><b>Draining</b>: −${Engine.modVal(it, 'draining')}% to everything it touches</span>`);
+  if (Engine.modVal(it, 'pack')) extra.push(`<b>of the Pack</b>: +${Engine.modVal(it, 'pack')}% to itself for each touching ${COMP[it.type].kind}`);
+  const tw = Engine.combosOf(it).includes('twilight'), twMaybe = !tw && Engine.possibleCombos(it).includes('twilight');
+  if (tw) extra.push('<b>Twilight</b> (active): +20% to everything it touches');
+  else if (twMaybe) extra.push('<b>Twilight</b> (if you socket Sun + Moon): +20% to everything it touches');
+  const base = NEIGHBOUR_RULE[it.type] || (extra.length ? 'Its type doesn\'t affect neighbours, but:' : 'Doesn\'t affect its neighbours. Put it wherever it fits (it can still be boosted by others).');
+  return base + (extra.length ? `<ul class="mods">${extra.map((x) => `<li>${x}</li>`).join('')}</ul>` : '');
+}
+const pct = (f) => `${f >= 1 ? '+' : '−'}${Math.round(Math.abs(f - 1) * 100)}%`;
+
 // Pieces are held by their middle square: it stays under the cursor and rotation spins around it.
 function handleIndex(it) {
   const cells = Engine.cellsFor(it, 0);
@@ -195,6 +231,8 @@ $('pouchActions').onclick = (e) => {
 $('expand').onclick = (e) => { const d = e.target.closest('button')?.dataset.expand; if (d) send({ type: 'expand', dir: d }); };
 $('focus').onclick = (e) => {
   const b = e.target.closest('button'); if (!b) return;
+  if (b.dataset.act === 'hrot') return rotateHeld();
+  if (b.dataset.act === 'hdrop') { held = null; return render(); }
   const it = findItem(focusId); if (!it) return;
   if (b.dataset.act === 'store') { send({ type: 'store', itemId: it.id }); focusId = null; }
   if (b.dataset.act === 'upgrade') send({ type: 'upgrade', itemId: it.id });
@@ -384,6 +422,8 @@ function renderMachine() {
     });
   }
   const stats = Engine.stats(m);
+  const fl = focusId && stats.links[focusId];
+  const focusLinks = fl ? { from: new Set(fl.in.map((l) => l.from).filter((x) => x !== null && x !== focusId)), to: new Set(fl.out) } : null;
   let html = '';
   for (let y = 0; y < m.h; y++) for (let x = 0; x < m.w; x++) {
     const k = y * m.w + x, info = cellInfo[k];
@@ -394,6 +434,8 @@ function renderMachine() {
       style = `--cc:${def.color}`;
       cls.push('filled');
       if (it.id === focusId) cls.push('focused');
+      if (focusLinks?.from.has(it.id)) cls.push('link-in');
+      if (focusLinks?.to.has(it.id)) cls.push('link-out');
       const same = (dx, dy) => { const nx = x + dx, ny = y + dy; return nx >= 0 && ny >= 0 && nx < m.w && ny < m.h && occ[ny * m.w + nx] === it.id; };
       if (!same(0, -1)) cls.push('bt'); if (!same(0, 1)) cls.push('bb'); if (!same(-1, 0)) cls.push('bl'); if (!same(1, 0)) cls.push('br');
       const socks = Engine.socketsOf(it);
@@ -425,15 +467,43 @@ function renderMachine() {
     ${statLine('Resonance', stats.resonance, after?.resonance, fmt)}
     <div class="dim tiny">Tier ${S.tiers.max + 1} unlocks at ${fmt(S.tiers.nextReq)} (${fmt(Math.max(0, S.tiers.nextReq - stats.resonance))} to go)</div></div>`);
 
-  // inspecting an installed component
+  // inspecting an installed component: what it takes, and exactly how it works with its neighbours
   const f = focusId && m.items.find((it) => it.id === focusId);
-  setHTML($('focus'), f && !locked ? `<div class="focusbox" style="border-color:${RAR[f.rarity || 'common'].color}"><b>${compTitle(f)}</b>
-    <span class="dim">· ${RAR[f.rarity || 'common'].name} · power ${fmt1(10 * (stats.power[f.id] || 0))}</span><br>
-    <small>${esc(COMP[f.type].desc)}</small>${takes(f)}${f.mods?.length ? `<ul class="mods">${modList(f)}</ul>` : ''}${comboLine(f)}<div class="row">
-    ${Engine.socketsOf(f).map((sk, s) => f.runes[s] ? `<button class="small ghost" data-unsocket="${s}">Remove ${EL[f.runes[s].el].icon} ${R[f.runes[s].rank]}</button>` : `<span class="dim small">empty ${EL[sk.el].icon} socket</span>`).join(' ')}
-    </div><div class="row">${f.lvl < Engine.MAX_LEVEL ? `<button class="small" data-act="upgrade" ${canAfford(Engine.upgradeCost(f)) ? '' : 'disabled'}>⬆ Upgrade to +${f.lvl} (${costLabel(Engine.upgradeCost(f))})</button>` : '<span class="dim small">Max level</span>'}
-    <button class="small" data-act="move">Move</button><button class="small" data-act="rot">Rotate</button>
-    <button class="small" data-act="store">Put in storage</button><button class="small ghost" data-act="close">✕</button></div></div>` : '');
+  const held2 = held?.kind === 'comp' && findItem(held.id);
+  const nameOf = (id) => { const o = m.items.find((x) => x.id === id); return o ? esc(Engine.itemName(o)) : '?'; };
+  let panel = '';
+  if (f && !locked) {
+    const L = stats.links[f.id];
+    const inList = L.in.map((l) => `<li class="${l.f >= 1 ? 'buff' : 'curse'}">${l.from === null ? esc(l.why) : `${nameOf(l.from)} <span class="dim">(${esc(l.why)})</span>`} <b>${pct(l.f)}</b></li>`).join('');
+    const isBooster = L.booster;
+    const outText = L.dead && isBooster ? '<span class="warn">⚠ Its sockets are empty, so it boosts nothing. Socket a rune to switch it on.</span>'
+      : L.out.length ? L.out.map(nameOf).join(', ')
+        : isBooster ? `<span class="warn">Touches nothing it can boost${f.type === 'capacitor' ? ' (it only helps weapons)' : ''}.</span>` : '<span class="dim">nothing</span>';
+    panel = `<div class="focusbox" style="border-color:${RAR[f.rarity || 'common'].color}">
+      <div class="fhead">${bigShape(f, f.rot)}<div><b>${compTitle(f)}</b>
+      <div class="dim">${RAR[f.rarity || 'common'].name} · power <b class="gold">${fmt1(10 * (stats.power[f.id] || 0))}</b>
+        ${L.dead ? '<span class="warn">(off: no runes)</span>' : `<span class="small">(${fmt1(10 * (stats.base[f.id] || 0))} on its own${inList ? ', boosted by neighbours' : ''})</span>`}</div>
+      <small>${esc(COMP[f.type].desc)}</small>${takes(f)}</div></div>
+      <div class="nb"><b>Neighbours:</b> ${neighbourRule(f)}</div>
+      <div class="nb"><span class="tag in">Boosted by</span> ${inList ? `<ul class="mods">${inList}</ul>` : '<span class="dim">nothing yet</span>'}</div>
+      ${isBooster || L.out.length ? `<div class="nb"><span class="tag out">Boosts</span> ${outText}</div>` : ''}
+      ${f.mods?.length ? `<ul class="mods">${modList(f)}</ul>` : ''}${comboLine(f)}
+      <div class="row">${Engine.socketsOf(f).map((sk, s) => f.runes[s] ? `<button class="small ghost" data-unsocket="${s}">Remove ${EL[f.runes[s].el].icon} ${R[f.runes[s].rank]}</button>` : `<span class="dim small">empty ${EL[sk.el].icon} ${EL[sk.el].name} socket</span>`).join(' ')}</div>
+      <div class="row">${f.lvl < Engine.MAX_LEVEL ? `<button class="small" data-act="upgrade" ${canAfford(Engine.upgradeCost(f)) ? '' : 'disabled'}>⬆ Upgrade to +${f.lvl} (${costLabel(Engine.upgradeCost(f))})</button>` : '<span class="dim small">Max level</span>'}
+      <button class="small" data-act="move">Move</button><button class="small" data-act="rot">Rotate</button>
+      <button class="small" data-act="store">Put in storage</button><button class="small ghost" data-act="close">✕</button></div>
+      <p class="hint">On the grid: <span class="tag in">green</span> pieces boost this one, <span class="tag out">gold</span> pieces are boosted by it.</p></div>`;
+  } else if (held2 && !locked) {
+    // holding a component (from storage, or moving one): show its shape big, turned the way it will be placed
+    panel = `<div class="focusbox" style="border-color:${RAR[held2.rarity || 'common'].color}">
+      <div class="fhead">${bigShape(held2, held.rot)}<div><b>${compTitle(held2)}</b> <span class="dim">· ${RAR[held2.rarity || 'common'].name} · ${Engine.shapeOf(held2).length} square${Engine.shapeOf(held2).length === 1 ? '' : 's'}</span><br>
+      <small>${esc(COMP[held2.type].desc)}</small>${takes(held2)}</div></div>
+      <div class="nb"><b>Neighbours:</b> ${neighbourRule(held2)}</div>
+      ${held2.mods?.length ? `<ul class="mods">${modList(held2)}</ul>` : ''}${comboLine(held2)}
+      <div class="row"><button class="small" data-act="hrot">⟳ Rotate (R)</button><button class="small ghost" data-act="hdrop">Put it down (Esc)</button></div>
+      <p class="hint">Move over your machine to see where it lands, then click to place it.</p></div>`;
+  }
+  setHTML($('focus'), panel);
 
   setHTML($('helpline'), locked ? '🔒 Your machine is in the Rift. Recall it to make changes.'
     : held?.kind === 'comp' && hoverCell && !ghostOk ? `<span class="warn">${ghostOff ? `${ghostOff} square${ghostOff === 1 ? '' : 's'} would hang off the machine.` : 'That overlaps another component.'}</span> Press <b>R</b> to rotate, <b>Esc</b> to cancel.`

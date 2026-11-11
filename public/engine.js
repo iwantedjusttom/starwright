@@ -203,22 +203,34 @@
         * (has(it, 'pure') ? 1.3 : 1) * (has(it, 'abyss') ? 1.35 : 1);
       mult[it.id] = 1;
     }
+    // links: who boosts whom (for explaining the build). in = effects received, out = components it affects.
+    const links = {};
+    for (const it of m.items) links[it.id] = { in: [], out: [], touching: [...touching[it.id]], emptyAround: emptyAround[it.id] };
+    const apply = (target, f, from, why) => {
+      if (Math.abs(f - 1) < 1e-9) return;
+      mult[target] *= f;
+      links[target].in.push({ from, why, f });
+      if (from !== null && from !== target && !links[from].out.includes(target)) links[from].out.push(target);
+    };
     for (const it of m.items) {
       const def = COMPONENTS[it.type], strength = base[it.id];
       const on = strength > 0;
       for (const nid of touching[it.id]) {
         const n = byId[nid], nd = COMPONENTS[n.type];
-        if (def.aura) mult[nid] *= 1 + def.aura * strength;
-        if (def.weaponAura && nd.kind === 'weapon') mult[nid] *= 1 + def.weaponAura * strength;
-        if (it.type === 'coil' && n.type === 'coil') mult[nid] *= 1.5;
-        if (on && modVal(it, 'resonance')) mult[nid] *= 1 + modVal(it, 'resonance') / 100;
-        if (on && has(it, 'twilight')) mult[nid] *= 1.2;
-        if (modVal(it, 'draining')) mult[nid] *= 1 - modVal(it, 'draining') / 100;
-        if (modVal(it, 'pack') && nd.kind === def.kind) mult[it.id] *= 1 + modVal(it, 'pack') / 100;
+        if (def.aura) apply(nid, 1 + def.aura * strength, it.id, 'aura');
+        if (def.weaponAura && nd.kind === 'weapon') apply(nid, 1 + def.weaponAura * strength, it.id, 'weapons');
+        if (it.type === 'coil' && n.type === 'coil') apply(nid, 1.5, it.id, 'coil chain');
+        if (on && modVal(it, 'resonance')) apply(nid, 1 + modVal(it, 'resonance') / 100, it.id, 'of Resonance');
+        if (on && has(it, 'twilight')) apply(nid, 1.2, it.id, 'Twilight');
+        if (modVal(it, 'draining')) apply(nid, 1 - modVal(it, 'draining') / 100, it.id, 'Draining');
+        if (modVal(it, 'pack') && nd.kind === def.kind) apply(it.id, 1 + modVal(it, 'pack') / 100, nid, 'of the Pack');
       }
-      if (it.type === 'lash') mult[it.id] *= 1 + 0.25 * emptyAround[it.id];
+      if (it.type === 'lash') apply(it.id, 1 + 0.25 * emptyAround[it.id], null, `${emptyAround[it.id]} empty square${emptyAround[it.id] === 1 ? '' : 's'} next to it`);
+      // A booster with nothing in its sockets boosts nothing: flag it so the player can see why.
+      links[it.id].booster = !!(def.aura || def.weaponAura || modVal(it, 'resonance') || (it.type === 'coil'));
+      links[it.id].dead = !on;
     }
-    const s = { dmg: 0, hp: 100, armor: 0, regen: 0, loot: 0, bossDmg: 0, power: {}, combos };
+    const s = { dmg: 0, hp: 100, armor: 0, regen: 0, loot: 0, bossDmg: 0, power: {}, combos, links, base };
     let hpPenalty = 0, total = 0;
     for (const it of m.items) {
       const def = COMPONENTS[it.type], p = base[it.id] * mult[it.id], on = p > 0, lf = levelFactor(it.lvl);
