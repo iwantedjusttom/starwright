@@ -254,7 +254,12 @@ Three kinds, all ~14 px tall with rounded ends:
 
 ## 6. Objects and icons (transparent PNGs)
 
-### Runes (5): highest priority
+### Runes (5): ✅ DONE
+Already made and in the game: faceted crystal gemstones, each with its element symbol inside a brass gear-and-compass
+ring, glowing in the element's color. **Use them as the style reference for everything else** (same crystal,
+brass and glow language).
+
+Original spec, for reference:
 `runes/sun.png`, `moon.png`, `tide.png`, `ember.png`, `void.png`. **128 × 128.**
 A glowing gemstone carved with its element's symbol, in its color, with a soft inner glow. Must read clearly at
 28 px. One per element: the game adds the rank (I–VIII) and makes higher ranks glow brighter.
@@ -330,7 +335,7 @@ lettering is welcome.
 
 If you make things in batches, this order gives the biggest visual jump first:
 
-1. **Runes (5) and empty sockets (5)**: on screen constantly.
+1. ~~Runes (5)~~ **done ✅** (match their style for everything else). **Empty sockets (5)**: on screen constantly.
 2. **Component tiles (9), grid slot, grid frame**: the machine screen.
 3. **Panel frame, buttons (big + normal + ghost + selected), field, inset frame**: the whole interface changes feel.
 4. **Arena background, targets (4), bars**: the Rift.
