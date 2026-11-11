@@ -208,3 +208,19 @@ main.machines { grid-template-columns: 1fr 1.5fr 0.85fr; }
   font-size:11px; font-weight:bold; padding:2px 6px; border-radius:999px; box-shadow:0 1px 4px rgba(0,0,0,.6); }
 .badge.give { background:#2f8f46; color:#fff; } .badge.get { background:#d9a520; color:#1a1405; } .badge.drain { background:#b33a3a; color:#fff; }
 .badge.both { background:linear-gradient(90deg,#2f8f46,#d9a520); color:#fff; }
+
+/* rune art (public/assets/runes/*.png): sized to fit, glowing brighter at higher ranks */
+.runeimg { width:24px; height:24px; object-fit:contain; pointer-events:none; filter: drop-shadow(0 0 1px rgba(0,0,0,.8)); }
+.rune.hasart { padding:.1em .35em; }
+.rune.hasart .runeimg { width:30px; height:30px; }
+.sock.full .runeimg { width:40px; height:40px; margin:-4px; }
+.sock.full:has(.runeimg) { border-color:transparent; background:transparent; }
+.runeimg.rank-2 { filter: drop-shadow(0 0 2px var(--ec)); }
+.runeimg.rank-3 { filter: drop-shadow(0 0 3px var(--ec)); }
+.runeimg.rank-4 { filter: drop-shadow(0 0 4px var(--ec)) brightness(1.05); }
+.runeimg.rank-5 { filter: drop-shadow(0 0 5px var(--ec)) brightness(1.1); }
+.runeimg.rank-6, .runeimg.rank-7, .runeimg.rank-8 { filter: drop-shadow(0 0 7px var(--ec)) drop-shadow(0 0 2px #fff) brightness(1.15); }
+.rune sub, .sock sub { text-shadow: 0 0 3px #000, 0 0 2px #000; font-weight:bold; }
+.sock.full:has(.runeimg) sub, .rune.hasart sub { position:absolute; left:-6px; bottom:-5px; font-size:10px; color:#fff;
+  background:rgba(11,14,26,.85); border:1px solid var(--ec); border-radius:6px; padding:0 3px; line-height:13px; }
+.rune.hasart { position:relative; }

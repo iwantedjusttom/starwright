@@ -78,7 +78,15 @@ function toast(t) { $('toast').textContent = t; $('toast').classList.add('show')
 // ---------------------------------------------------------------- shared helpers
 const EL = Engine.ELEMENTS, COMP = Engine.COMPONENTS;
 const R = Engine.ROMAN;
-const runeChip = (r, extra = '') => `<span class="rune el-${r.el} ${extra}" data-rune="${r.id}" title="${EL[r.el].name} ${R[r.rank]}">${EL[r.el].icon}<sub>${R[r.rank]}</sub></span>`;
+// Art: rune images are used when present in public/assets/runes/ (falls back to the element symbol otherwise).
+const ART = { rune: {} };
+for (const el of Engine.ELEMENT_KEYS) {
+  const im = new Image();
+  im.onload = () => { ART.rune[el] = im.src; if (S) render(); };
+  im.src = `assets/runes/${el}.png`;
+}
+const runeArt = (r) => (ART.rune[r.el] ? `<img class="runeimg rank-${Math.min(r.rank, 8)}" src="${ART.rune[r.el]}" alt="${EL[r.el].name}" draggable="false">` : EL[r.el].icon);
+const runeChip = (r, extra = '') => `<span class="rune el-${r.el} ${extra} ${ART.rune[r.el] ? 'hasart' : ''}" data-rune="${r.id}" title="${EL[r.el].name} ${R[r.rank]}">${runeArt(r)}<sub>${R[r.rank]}</sub></span>`;
 const RAR = Engine.RARITIES;
 const compTitle = (it) => `<span style="color:${RAR[it.rarity || 'common'].color}">${esc(Engine.itemName(it))}</span>${it.lvl > 1 ? ` <span class="gold">+${it.lvl - 1}</span>` : ''}`;
 const modList = (it) => (it.mods || []).map((m) => `<li class="${Engine.MODS[m.k].bad ? 'curse' : 'buff'}">${Engine.MODS[m.k].bad ? '▼' : '▲'} ${esc(Engine.MODS[m.k].text(m.v))}</li>`).join('');
@@ -456,7 +464,7 @@ function renderMachine() {
       if (s >= 0) {
         const r = it.runes[s], want = socks[s].el;
         cls.push('sockcell', 'el-' + want);
-        inner = r ? `<span class="sock full el-${r.el} ${r.el === want ? '' : 'mismatch'}" title="${EL[r.el].name} ${R[r.rank]} in a ${EL[want].name} socket">${EL[r.el].icon}<sub>${R[r.rank]}</sub>${r.el === want ? '' : `<span class="want el-${want}">wants ${EL[want].name}</span>`}</span>`
+        inner = r ? `<span class="sock full el-${r.el} ${r.el === want ? '' : 'mismatch'}" title="${EL[r.el].name} ${R[r.rank]} in a ${EL[want].name} socket">${runeArt(r)}<sub>${R[r.rank]}</sub>${r.el === want ? '' : `<span class="want el-${want}">wants ${EL[want].name}</span>`}</span>`
           : `<span class="sock el-${want}" title="wants a ${EL[want].name} rune">${EL[want].icon}<span class="want">${EL[want].name}</span></span>`;
       }
       if (badges[it.id] && ci === handleIndex(it)) inner += `<span class="badge ${badges[it.id].cls}">${badges[it.id].text}</span>`;
