@@ -42,7 +42,7 @@ function pop(e, text, cls = '') {
   setTimeout(() => d.remove(), 700);
 }
 
-let ws, S = null;
+let ws, S = null, selectedRune = null, selectedTier = null, hoverSocket = null;
 const runEndSeen = {}; // run-end time (server) → when this browser first saw it (local), avoids clock-skew issues
 const pid = localStorage.pid || (localStorage.pid = Math.random().toString(36).slice(2) + Date.now().toString(36));
 $('name').value = localStorage.name || '';
@@ -84,12 +84,34 @@ $('polish').addEventListener('pointerdown', (e) => {
   pop(e, '+' + fmt(gain));
 });
 $('buildings').onclick = (e) => { const k = e.target.closest('button')?.dataset.buy; if (k) send({ type: 'buy', key: k }); };
-$('relics').onclick = (e) => { const k = e.target.closest('button')?.dataset.relic; if (k) send({ type: 'relic', key: k }); };
+$('elementPick').onclick = (e) => { const el = e.target.closest('[data-el]')?.dataset.el; if (el) send({ type: 'element', el }); };
+$('pouch').onclick = (e) => {
+  const id = +e.target.closest('[data-rune]')?.dataset.rune;
+  if (!id) return;
+  selectedRune = selectedRune === id ? null : id;
+  render();
+};
+$('pouchActions').onclick = (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  if (b.dataset.merge) { const [el, rank] = b.dataset.merge.split(':'); send({ type: 'merge', el, rank: +rank }); }
+  if (b.dataset.give) { send({ type: 'give', runeId: selectedRune, to: b.dataset.give }); selectedRune = null; }
+};
+$('engineGrid').onclick = (e) => {
+  const s = e.target.closest('[data-socket]'); if (!s) return;
+  const i = +s.dataset.socket;
+  if (selectedRune) { send({ type: 'place', runeId: selectedRune, socket: i }); selectedRune = null; }
+  else if (S.engine.grid[i]) send({ type: 'unsocket', socket: i });
+};
+// Live preview: with a rune selected, hovering a socket shows exactly what Resonance you'd get.
+$('engineGrid').addEventListener('pointerover', (e) => { const s = e.target.closest('[data-socket]'); hoverSocket = s ? +s.dataset.socket : null; renderPreview(); });
+$('engineGrid').addEventListener('pointerleave', () => { hoverSocket = null; renderPreview(); });
 $('chatform').onsubmit = (e) => { e.preventDefault(); send({ type: 'chat', text: $('chat').value }); $('chat').value = ''; };
 function riftClick(e) {
   const b = e.target.closest('button'); if (!b) return;
   if (b.dataset.act === 'dismissRun') { localStorage.dismissedRun = S.lastRun.at; return render(); }
   if (b.dataset.act === 'boon') send({ type: 'boon', key: b.dataset.key });
+  else if (b.dataset.act === 'tier') { selectedTier = +b.dataset.tier; render(); }
+  else if (b.dataset.act === 'startRun') send({ type: 'startRun', tier: selectedTier });
   else send({ type: b.dataset.act });
 }
 $('rift').onclick = riftClick;
@@ -109,6 +131,7 @@ function setArena(mode, msg, cfg) {
   clearTimeout(spawnTimer);
   targets.forEach((t) => { clearTimeout(t.timer); t.el.remove(); });
   targets = [];
+  seenLinks.clear();
   combo = 0; showCombo();
   if (mode === 'fight') spawnTimer = setTimeout(spawnLoop, 400);
 }
@@ -117,22 +140,43 @@ function spawnLoop() {
   if (targets.length < arenaCfg.max) spawnTarget();
   spawnTimer = setTimeout(spawnLoop, arenaCfg.spawnMs * (0.7 + Math.random() * 0.6));
 }
-function spawnTarget() {
-  const r = arenaCfg.radius, w = arena.clientWidth, h = arena.clientHeight;
+// Linked targets: one on your screen and one on a friend's. Hit them at the same moment for a huge strike.
+const seenLinks = new Set(), shownResults = new Set();
+function syncLinks() {
+  if (arenaMode !== 'fight' || !S.run) return;
+  for (const l of S.run.links) {
+    if (seenLinks.has(l.id)) continue;
+    seenLinks.add(l.id);
+    spawnTarget({ link: l });
+  }
+  for (const res of S.run.linkResults) {
+    if (shownResults.has(res.id)) continue;
+    shownResults.add(res.id);
+    if (!seenLinks.has(res.id)) continue; // from before this screen was open
+    const rect = arena.getBoundingClientRect();
+    pop({ clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 },
+      res.ok ? `⚡ LINKED with ${res.partner}! ×3` : `link with ${res.partner} broke`, res.ok ? 'linked' : 'miss');
+  }
+}
+function spawnTarget(opts = {}) {
+  const link = opts.link;
+  const r = Math.round(arenaCfg.radius * (link ? 1.25 : 1)), w = arena.clientWidth, h = arena.clientHeight;
   if (w < 4 * r || h < 4 * r) return;
   let x, y, tries = 0;
   do { x = r + Math.random() * (w - 2 * r); y = r + Math.random() * (h - 2 * r); }
   while (tries++ < 12 && targets.some((t) => Math.hypot(t.x - x, t.y - y) < t.r + r + 6));
+  const life = link ? link.ttl : arenaCfg.lifeMs;
   const el = document.createElement('div');
-  el.className = 'target';
-  el.style.cssText = `left:${x - r}px;top:${y - r}px;width:${2 * r}px;height:${2 * r}px;--life:${arenaCfg.lifeMs}ms`;
+  el.className = 'target' + (link ? ' linked' : '');
+  el.style.cssText = `left:${x - r}px;top:${y - r}px;width:${2 * r}px;height:${2 * r}px;--life:${life}ms` + (link ? `;--hue:${link.hue}` : '');
+  if (link) el.innerHTML = `<span>⚡ ${esc(link.partner)}</span>`;
   arena.appendChild(el);
-  const t = { x, y, r, el };
-  t.timer = setTimeout(() => { // too slow: the target fades and the combo breaks
+  const t = { x, y, r, el, link };
+  t.timer = setTimeout(() => { // too slow: the target fades (and a normal target breaks the combo)
     targets = targets.filter((o) => o !== t);
     el.classList.add('expired'); setTimeout(() => el.remove(), 250);
-    if (combo) { combo = 0; showCombo('lost'); }
-  }, arenaCfg.lifeMs);
+    if (!link && combo) { combo = 0; showCombo('lost'); }
+  }, life);
   targets.push(t);
 }
 function showCombo(state) {
@@ -156,6 +200,12 @@ arena.addEventListener('pointerdown', (e) => {
   targets = targets.filter((t) => t !== best);
   best.el.classList.add('popped'); setTimeout(() => best.el.remove(), 200);
   const acc = 1 - bestD / best.r;
+  if (best.link) {
+    send({ type: 'linkHit', id: best.link.id, acc, combo });
+    combo++; showCombo();
+    pop(e, `⚡ now ${best.link.partner}!`, 'linked');
+    return;
+  }
   send({ type: 'hit', acc, combo });
   combo++; showCombo();
   pop(e, acc >= 0.85 ? 'BULLSEYE!' : acc >= 0.45 ? 'Hit' : 'Graze', acc >= 0.85 ? 'crit' : 'hit');
@@ -164,9 +214,9 @@ arena.addEventListener('pointerdown', (e) => {
 });
 
 // ---------------------------------------------------------------- render
-const resIcons = () => Object.fromEntries(Object.entries(S.resources).map(([k, r]) => [k, r.icon]));
-const costText = (c) => Object.entries(c).map(([k, n]) => `${fmt(n)} ${resIcons()[k]}`).join(' + ');
-const lootLine = (l) => Object.entries(l).filter(([, n]) => n > 0).map(([k, n]) => `${fmt(n)} ${resIcons()[k]}`).join('  ') || 'nothing yet';
+const EL = Engine.ELEMENTS;
+const runeChip = (r, extra = '') => `<span class="rune el-${r.el} ${extra}" data-rune="${r.id}" title="${EL[r.el].name} ${Engine.ROMAN[r.rank]}">${EL[r.el].icon}<sub>${Engine.ROMAN[r.rank]}</sub></span>`;
+const runeList = (rs) => rs.length ? rs.map((r) => runeChip(r)).join('') : '<span class="dim">none yet</span>';
 
 function render() {
   if (!S) return;
@@ -174,20 +224,21 @@ function render() {
   $('dust').textContent = fmt(S.dust);
   $('dps').textContent = fmt(S.dps);
   $('harmony').textContent = '×' + S.harmony;
+  $('tierhead').textContent = S.tiers.max;
+  $('reshead').textContent = fmt(S.engine.resonance);
   $('clickval').textContent = `+${fmt(S.clickPower)} per click`;
-  setHTML($('reshead'), Object.entries(S.resources).map(([k, r]) => `<span title="${esc(r.name)}"><b>${fmt(S.res[k])}</b> ${r.icon}</span>`).join(' &nbsp; '));
 
   const item = (u) => `<div class="item"><div>${esc(u.name)} <span class="dim">(${u.count})</span><small>${esc(u.desc)}</small></div>
     <button data-buy="${u.key}" ${S.dust < u.cost ? 'disabled' : ''}>${fmt(u.cost)} ✧</button></div>`;
-  setHTML($('buildings'), S.buildings.map(item).join('') + item(S.cloth));
-
-  setHTML($('relics'), S.relics.map((r) => `<div class="item"><div>${esc(r.name)} <span class="dim">(lv ${r.level}${r.max ? '/' + r.max : ''})</span><small>${esc(r.desc)}</small></div>
-    <button data-relic="${r.key}" ${r.affordable ? '' : 'disabled'}>${r.maxed ? 'Max' : costText(r.cost)}</button></div>`).join(''));
+  setHTML($('buildings'), S.buildings.map(item).join('') + item(S.cloth) +
+    (S.engine.resonance ? `<p class="hint">The Star Engine's Resonance boosts all production: ×${(1 + S.engine.resonance / 100).toFixed(2)}</p>` : ''));
 
   renderRift(now);
+  renderEngine();
+  syncLinks();
 
-  setHTML($('players'), S.players.map((p) => `<div><span class="${p.online ? 'on' : 'off'}">●</span> ${esc(p.name)}
-    <span class="dim">· ${fmt(p.contributed)} clicked</span></div>`).join(''));
+  setHTML($('players'), S.players.map((p) => `<div><span class="${p.online ? 'on' : 'off'}">●</span> ${p.el ? `<span class="elc el-${p.el}">${EL[p.el].icon}</span> ` : ''}${esc(p.name)}
+    <span class="dim">· ${p.runes} rune${p.runes === 1 ? '' : 's'} · ${fmt(p.contributed)} clicked</span></div>`).join(''));
 
   const feed = $('feed');
   const atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 30;
@@ -195,42 +246,87 @@ function render() {
   if (atBottom) feed.scrollTop = feed.scrollHeight;
 }
 
+function renderEngine() {
+  const E = S.engine, me = S.you;
+  $('engineBox').classList.toggle('hidden', !!(S.run && S.run.inRun)); // keep the fight screen uncluttered
+  setHTML($('elementPick'), me.el ? '' : `<div class="pick"><b>Choose your element.</b> Most runes you find will match it, so the crew needs each other's runes to build a great Engine.
+    <div class="els">${Engine.ELEMENT_KEYS.map((k) => `<button data-el="${k}" class="el-${k}"><b>${EL[k].icon} ${EL[k].name}</b><small>${esc(EL[k].rule)}</small></button>`).join('')}</div></div>`);
+  const t = S.tiers;
+  const pct = Math.max(0, Math.min(100, 100 * (E.resonance - t.curReq) / (t.nextReq - t.curReq)));
+  setHTML($('engineHead'), `<div class="row" style="justify-content:space-between"><span>Resonance <b class="gold">${fmt(E.resonance)}</b></span>
+    <span class="dim">Tier ${t.next} unlocks at ${fmt(t.nextReq)}</span></div>
+    <div class="bar"><div style="width:${pct}%;background:var(--violet)"></div></div>`);
+  if (selectedRune && !me.pouch.some((r) => r.id === selectedRune)) selectedRune = null;
+  $('engineGrid').style.gridTemplateColumns = `repeat(${E.size}, 64px)`;
+  setHTML($('engineGrid'), E.grid.map((g, i) => `<div class="socket ${g ? 'el-' + g.el + ' full' : ''} ${selectedRune ? 'target-ok' : ''}" data-socket="${i}">${g
+    ? `<span class="ri">${EL[g.el].icon}</span><span class="rr">${Engine.ROMAN[g.rank]}</span><span class="rv">${fmt(E.values[i])}</span>` : ''}</div>`).join(''));
+  setHTML($('pouch'), me.pouch.length ? [...me.pouch].sort((a, b) => a.el.localeCompare(b.el) || b.rank - a.rank)
+    .map((r) => runeChip(r, r.id === selectedRune ? 'sel' : '')).join('') : '<span class="dim">No runes yet. Open the Rift to find some!</span>');
+  // Fuse suggestions (3 identical → next rank) and gifting the selected rune
+  const groups = {};
+  for (const r of me.pouch) { const k = `${r.el}:${r.rank}`; groups[k] = (groups[k] || 0) + 1; }
+  const merges = Object.entries(groups).filter(([k, n]) => n >= 3 && +k.split(':')[1] < Engine.MAX_RANK)
+    .map(([k]) => { const [el, rank] = k.split(':'); return `<button data-merge="${k}" class="small">Fuse 3× ${EL[el].icon} ${Engine.ROMAN[rank]} → ${Engine.ROMAN[+rank + 1]}</button>`; });
+  const others = S.players.filter((p) => p.ref !== me.ref);
+  const gives = selectedRune && others.length ? `<span class="dim">Give it to:</span> ${others.map((p) => `<button data-give="${p.ref}" class="small ghost">${p.el ? EL[p.el].icon + ' ' : ''}${esc(p.name)}</button>`).join('')}` : '';
+  setHTML($('pouchActions'), `<div class="row">${merges.join('')}</div>${gives ? `<div class="row">${gives}</div>` : ''}
+    <p class="hint">${selectedRune ? 'Now click a socket to place it (it swaps with whatever is there).' : 'Click a rune to select it, then click a socket. Click a placed rune to take it back.'}</p>`);
+  setHTML($('rules'), Engine.ELEMENT_KEYS.map((k) => `<div><span class="elc el-${k}">${EL[k].icon} ${EL[k].name}</span>: ${esc(EL[k].rule)}</div>`).join(''));
+  renderPreview();
+}
+
+function renderPreview() {
+  const E = S && S.engine;
+  let txt = '&nbsp;';
+  if (E && selectedRune && hoverSocket != null) {
+    const r = S.you.pouch.find((q) => q.id === selectedRune);
+    if (r) {
+      const grid = E.grid.map((g) => g && { el: g.el, rank: g.rank });
+      grid[hoverSocket] = { el: r.el, rank: r.rank };
+      const after = Engine.score(grid, E.size).total, d = after - E.resonance;
+      txt = `Placing ${EL[r.el].icon} ${Engine.ROMAN[r.rank]} here: Resonance <b class="${d >= 0 ? 'gold' : 'warn'}">${fmt(after)} (${d >= 0 ? '+' : ''}${d})</b>`;
+    }
+  }
+  if ($('preview').innerHTML !== txt) $('preview').innerHTML = txt;
+}
+
 function renderRift(now) {
   const R = S.run;
   const bottom = (html) => setHTML($('riftBottom'), html);
-  $('relicsBox').classList.toggle('hidden', !!(R && R.inRun)); // keep the fight screen uncluttered
 
   if (!R && S.lastRun && localStorage.dismissedRun != S.lastRun.at && Date.now() - (runEndSeen[S.lastRun.at] ??= Date.now()) < 30 * 60 * 1000) {
     // Run summary: the arena stays where it was (inert), so leftover clicks land on nothing.
-    const L = S.lastRun;
+    const L = S.lastRun, mine = L.mine || { found: 0, kept: 0 };
     const armed = Date.now() - runEndSeen[L.at] > 1500;
-    setHTML($('rift'), `<h2>The Rift</h2>
-      <div class="row"><b>Floor ${L.floor}</b> · loot: ${lootLine(L.loot)}</div>
+    setHTML($('rift'), `<h2>The Rift · Tier ${L.tier}</h2>
+      <div class="row"><b>Floor ${L.floor}</b> · you found ${mine.found} rune${mine.found === 1 ? '' : 's'}</div>
       <div>${L.retreated ? 'The party made it out' : 'Party HP 0'}</div><div class="bar party"><div style="width:${L.retreated ? 100 : 0}%"></div></div>
       <div class="enemy"><div class="name" style="color:${L.retreated ? '#7ee787' : 'var(--red)'}">${L.retreated ? '🏳 Retreated safely' : '💀 The party fell'}</div>
         <div class="dim">${L.retreated ? 'from' : 'on'} floor ${L.floor}</div>
         <div class="bar"><div></div></div><div>&nbsp;</div></div>`);
-    setArena('inert', `Brought home: <b>${lootLine(L.kept)}</b>`);
-    bottom(`<p class="hint">Best floor ever: ${S.bestFloor}. Spend your loot on Relics below.</p>
+    setArena('inert', `You brought home <b>${mine.kept}</b> rune${mine.kept === 1 ? '' : 's'}`);
+    bottom(`<p class="hint">They're in your pouch. Fuse them, give them to friends, and set them in the Star Engine.</p>
       <div class="row"><button data-act="dismissRun" ${armed ? '' : 'disabled'}>${armed ? 'Back to the observatory' : 'Catching your breath…'}</button></div>`);
     return;
   }
   if (!R) {
     setArena('off');
     bottom('');
+    const t = S.tiers.max;
+    if (!selectedTier || selectedTier > t) selectedTier = t;
+    const cost = S.tiers.costs[selectedTier - 1];
     setHTML($('rift'), `<h2>The Rift</h2>
-      <p>Spend stardust to tear open the Rift. Everyone online dives in together, and friends can jump in later.
-      <b>Targets pop up in the arena: hit them dead centre</b> for big damage. Missing, or letting one fade, breaks your combo.
-      Between floors, each runner picks a boon. Every 5th floor is a boss.</p>
-      <p>Enemies drop loot: ◆ <b>Starshards</b> everywhere, 🪨 <b>Meteor Iron</b> from floor 3 down, 🔮 <b>Void Pearls</b> from bosses.
-      <b>Retreat</b> between floors to keep it all. <b>Fall</b> and you keep half.</p>
-      <p class="dim">Best floor reached: ${S.bestFloor || '—'}</p>
-      <button class="big" data-act="startRun" ${S.dust < S.runCost ? 'disabled' : ''}>Open the Rift (${fmt(S.runCost)} ✧)</button>
-      <p class="hint">Costs about 3 minutes of production. If the whole party goes offline, the Rift freezes until someone returns.</p>`);
+      <p>Spend stardust to tear open the Rift. Everyone online dives in together. <b>Hit targets dead centre</b> for big damage;
+      missing or letting one fade breaks your combo. With friends, <b>⚡ linked targets</b> appear: hit yours at the same moment as your partner for a triple strike.</p>
+      <p>Every runner finds their own <b>runes</b>, mostly of their element. Higher tiers drop stronger runes. <b>Retreat</b> between floors to keep them all; <b>fall</b> and you keep half.</p>
+      <div class="row tiers">${Array.from({ length: t }, (_, i) => `<button data-act="tier" data-tier="${i + 1}" class="small ${i + 1 === selectedTier ? 'on-tier' : 'ghost'}">Tier ${i + 1}</button>`).join('')}
+        <span class="dim">Tier ${t + 1} unlocks at Resonance ${fmt(S.tiers.nextReq)}</span></div>
+      <button class="big" data-act="startRun" ${S.dust < cost ? 'disabled' : ''}>Open a Tier ${selectedTier} Rift (${fmt(cost)} ✧)</button>
+      <p class="hint">If the whole party goes offline, the Rift freezes until someone returns. Best floor so far: ${S.bestFloor || '—'}.</p>`);
     return;
   }
-  const members = `<div class="members"><h3>Party</h3>${R.members.map((m) => `<div><span class="${m.online ? 'on' : 'off'}">●</span> <b>${esc(m.name)}</b> · ${fmt(m.dmg)} dmg ${m.picking ? '<span class="dim">(choosing…)</span>' : ''}<br><span class="dim">${m.boons.map(esc).join(', ') || 'no boons yet'}</span></div>`).join('')}</div>`;
-  const top = `<h2>The Rift</h2><div class="row"><b>Floor ${R.floor}</b> · loot: ${lootLine(R.loot)}</div>
+  const members = `<div class="members"><h3>Party</h3>${R.members.map((m) => `<div><span class="${m.online ? 'on' : 'off'}">●</span> ${m.el ? `<span class="elc el-${m.el}">${EL[m.el].icon}</span> ` : ''}<b>${esc(m.name)}</b> · ${fmt(m.dmg)} dmg · ${m.runes} rune${m.runes === 1 ? '' : 's'} ${m.picking ? '<span class="dim">(choosing…)</span>' : ''}<br><span class="dim">${m.boons.map(esc).join(', ') || 'no boons yet'}</span></div>`).join('')}</div>`;
+  const top = `<h2>The Rift · Tier ${R.tier}</h2><div class="row"><b>Floor ${R.floor}</b> · your runes: ${runeList(R.myLoot)}</div>
     <div>Party HP ${Math.ceil(R.partyHp)}/${R.partyMaxHp}</div><div class="bar party"><div style="width:${100 * Math.max(0, R.partyHp) / R.partyMaxHp}%"></div></div>`;
   if (!R.inRun) {
     setHTML($('rift'), top + `<p>Your crew is in the Rift.</p>`);
@@ -254,7 +350,7 @@ function renderRift(now) {
       <div class="bar"><div></div></div><div>&nbsp;</div></div>`);
   setArena('inert', R.myOffer ? (armed ? '↓ Choose a boon below ↓' : 'Steady…') : 'Waiting for the others to choose…');
   bottom((R.myOffer ? `<div class="boons">${R.myOffer.map((b) => `<button data-act="boon" data-key="${b.key}" ${armed ? '' : 'disabled'}><b>${esc(b.name)}</b><small>${esc(b.desc)}</small></button>`).join('')}</div>` : '') +
-    `<div class="row"><button data-act="retreat" class="ghost">🏳 Retreat now with ${lootLine(R.loot)}</button></div>${members}`);
+    `<div class="row"><button data-act="retreat" class="ghost">🏳 Retreat now, keeping every rune</button></div>${members}`);
 }
 
 setInterval(render, 500); // keep countdowns ticking between server updates

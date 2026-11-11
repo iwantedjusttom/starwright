@@ -74,5 +74,47 @@ button.big { touch-action: manipulation; }
 @keyframes tfade { to { transform:scale(.4); opacity:0; } }
 .pop.crit { color:var(--gold); font-size:24px; }
 .pop.miss { color:var(--dim); font-size:16px; }
-#reshead span { margin-right:.2em; }
-#relicsBox { margin-top:1em; }
+
+
+.gold { color:var(--gold); } .warn { color:#ffb86b; }
+button.small { padding:.25em .55em; font-size:12px; }
+
+/* elements */
+.el-sun { --ec:#f2c14e; } .el-moon { --ec:#b9c6ff; } .el-tide { --ec:#4fc3f7; } .el-ember { --ec:#ff7a45; } .el-void { --ec:#b07cff; }
+.elc { color:var(--ec); font-weight:bold; }
+.pick { border:1px solid var(--gold); border-radius:10px; padding:.7em; margin-bottom:.8em; background:#1d1a2e; }
+.els { display:grid; grid-template-columns:repeat(5, 1fr); gap:.4em; margin-top:.5em; }
+.els button { text-align:left; border-color:var(--ec); padding:.5em; }
+.els button b { color:var(--ec); }
+.els button small { display:block; color:var(--dim); font-size:11px; margin-top:.2em; }
+@media (max-width: 1300px) { .els { grid-template-columns:repeat(2, 1fr); } }
+
+/* runes & the star engine */
+.rune { display:inline-flex; align-items:center; gap:1px; padding:.2em .45em; margin:.15em; border:1px solid var(--ec); border-radius:8px;
+  color:var(--ec); background:#0f1426; cursor:pointer; font-size:18px; user-select:none; }
+.rune sub { font-size:10px; color:var(--ink); }
+.rune.sel { background:var(--ec); color:#0b0e1a; box-shadow:0 0 10px var(--ec); }
+.rune.sel sub { color:#0b0e1a; }
+#pouch { min-height:2.4em; }
+#engineGrid { display:grid; gap:6px; margin:.6em auto; width:fit-content; }
+.socket { width:64px; height:64px; border:1px dashed var(--line); border-radius:12px; position:relative; background:#0f1426;
+  display:flex; align-items:center; justify-content:center; cursor:pointer; user-select:none; }
+.socket.full { border:2px solid var(--ec); background: radial-gradient(circle, color-mix(in srgb, var(--ec) 25%, #0f1426), #0f1426 70%); }
+.socket.target-ok:hover { border-color:var(--gold); border-style:solid; box-shadow:0 0 10px rgba(242,193,78,.5); }
+.socket .ri { font-size:26px; color:var(--ec); }
+.socket .rr { position:absolute; top:3px; left:6px; font-size:11px; color:var(--ink); }
+.socket .rv { position:absolute; bottom:3px; right:6px; font-size:11px; color:var(--gold); }
+#preview { text-align:center; min-height:1.4em; }
+.rules { margin-top:.8em; font-size:13px; }
+.rules summary { cursor:pointer; color:var(--violet); }
+.rules div { margin:.25em 0; }
+.tiers button.on-tier { background:#4a3f8f; border-color:var(--violet); }
+
+/* linked targets */
+.target.linked { background: radial-gradient(circle, #fff 0 14%, hsl(var(--hue) 90% 65%) 14% 26%, hsl(var(--hue) 60% 25%) 26% 100%);
+  box-shadow: 0 0 18px hsl(var(--hue) 90% 60%), 0 0 4px #fff; animation: tgrow .15s ease-out, lpulse .5s ease-in-out infinite alternate; }
+.target.linked::after { border-color: hsl(var(--hue) 90% 70%); }
+.target.linked span { position:absolute; top:100%; left:50%; transform:translateX(-50%); white-space:nowrap; font-size:12px; font-weight:bold;
+  color:hsl(var(--hue) 90% 75%); margin-top:4px; }
+@keyframes lpulse { to { filter:brightness(1.35); } }
+.pop.linked { color:#fff; font-size:22px; text-shadow:0 0 10px var(--violet), 0 0 4px #000; }

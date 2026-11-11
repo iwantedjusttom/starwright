@@ -1,18 +1,25 @@
 # ✦ Starwright
 
-A cooperative multiplayer idle game for a small group of friends (1–5 players). Two mechanics, nothing else:
+A cooperative multiplayer idle game for a small group of friends (1–5 players).
 
-**1. The idle observatory.** Buildings make stardust all the time, including while everyone is away
-(up to 7 days of catch-up). Clicking *Polish the lens* adds more, and **Harmony** multiplies every click
-when several people click within 1.5s of each other. New buildings appear as you buy the previous one.
+**The goal: climb the Rift Tiers.** Every tier has tougher enemies, smaller and faster targets, and stronger runes.
 
-**2. The Rift.** Spend about 3 minutes of production to open it. Everyone online dives in together.
-Targets pop up in an arena: hit them near the centre for more damage (bullseyes crit), chain hits into a combo,
-and don't miss or let them fade. Between floors each runner drafts a boon; every 5th floor is a boss.
-Enemies drop loot: **Starshards** everywhere, **Meteor Iron** from floor 3 down, **Void Pearls** from bosses.
-Retreat between floors to keep it all; fall and you keep half.
+**The loop**
+1. **Idle:** buildings make stardust all the time, even while everyone is away. Clicking adds more;
+   **Harmony** multiplies clicks when several people click within 1.5s of each other.
+2. **The Rift:** spend stardust to open a Rift of any unlocked tier. Hit targets near the centre (bullseyes crit),
+   chain combos, draft a boon between floors, and fight a boss every 5th floor. With two or more runners,
+   **⚡ linked targets** appear on two players' screens at once: hit them together (within 0.6s) for a triple strike.
+3. **Runes:** every runner gets their own rune drops, mostly in **their element** (Sun, Moon, Tide, Ember or Void,
+   chosen when you join). Retreat between floors to keep them all; fall and keep half. Three identical runes fuse
+   into one of the next rank. You can give runes to crewmates.
+4. **The Star Engine:** a shared grid where anyone can place runes. Runes affect the runes they touch (Sun boosts
+   neighbours, Moon loves Sun, Tide chains, Ember fizzles next to Tide, Void boosts its row but drains its neighbours).
+   The total is **Resonance**: it multiplies stardust production and Rift damage, and **reaching thresholds unlocks
+   the next Rift Tier**. The Engine grows from 3×3 to 4×4 (Tier 3) and 5×5 (Tier 6). Hovering a socket with a rune
+   selected previews the exact Resonance you'd get.
 
-Loot buys **Relics**: permanent upgrades that boost stardust production, clicks, or your strength in the Rift.
+Because most of your runes match your own element, a great Engine needs everyone's runes.
 
 ## Run it
 
@@ -46,6 +53,7 @@ Without the Supabase variables, the server saves to local files in `data/` (fine
 ## Code map
 
 - `game.js`: all game rules (pure functions, unit-tested)
+- `public/engine.js`: the Star Engine's scoring rules, shared by the server and the browser
 - `server.js`: HTTP + WebSocket server, rooms, offline catch-up
 - `storage.js`: saves worlds to Supabase (if configured) or local JSON files
 - `public/`: the browser client (vanilla JS, no build step)

@@ -10,7 +10,7 @@
   <div id="join" class="join">
     <h1>✦ Starwright ✦</h1>
     <p>A shared observatory for you and your friends. It keeps making stardust while you're gone.
-      Spend it to open the Rift and fight for treasure together.</p>
+      Spend it to open the Rift, fight for runes together, and tune the Star Engine to climb to harder Rifts.</p>
     <input id="name" placeholder="Your name" maxlength="20">
     <input id="room" placeholder="Crew code (share this with friends)" maxlength="32">
     <button id="go">Enter the observatory</button>
@@ -19,7 +19,8 @@
   <div id="game" class="hidden">
     <header>
       <div><b id="dust">0</b> stardust <span class="dim">(<span id="dps">0</span>/s)</span></div>
-      <div id="reshead"></div>
+      <div>Rift Tier <b id="tierhead">1</b></div>
+      <div>Resonance <b id="reshead">0</b></div>
       <div>Harmony <b id="harmony">×1</b></div>
       <div class="dim" id="roomlabel"></div>
     </header>
@@ -36,10 +37,18 @@
         <div id="rift"></div>
         <div id="arena" class="hidden"><div id="arenaMsg"></div><div id="combo"></div></div>
         <div id="riftBottom"></div>
-        <div id="relicsBox">
-          <h2>Relics</h2>
-          <p class="hint">Permanent upgrades, paid for with what you bring back from the Rift.</p>
-          <div id="relics"></div>
+        <div id="engineBox">
+          <h2>Star Engine</h2>
+          <div id="elementPick"></div>
+          <div id="engineHead"></div>
+          <div id="engineGrid"></div>
+          <div id="preview" class="hint">&nbsp;</div>
+          <h3>Your runes</h3>
+          <div id="pouch"></div>
+          <div id="pouchActions"></div>
+          <details class="rules"><summary>How runes interact</summary><div id="rules"></div>
+            <p class="hint">"Touching" means directly up, down, left or right. A rank II rune is worth twice a rank I, rank III four times, and so on.
+            Resonance boosts stardust production and your Rift damage, and unlocks harder Rift Tiers with better runes.</p></details>
         </div>
       </section>
 
@@ -53,6 +62,7 @@
     </main>
     <div id="toast"></div>
   </div>
+  <script src="engine.js"></script>
   <script src="client.js"></script>
 </body>
 </html>
