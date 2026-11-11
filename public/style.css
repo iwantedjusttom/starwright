@@ -224,3 +224,6 @@ main.machines { grid-template-columns: 1fr 1.5fr 0.85fr; }
 .sock.full:has(.runeimg) sub, .rune.hasart sub { position:absolute; left:-6px; bottom:-5px; font-size:10px; color:#fff;
   background:rgba(11,14,26,.85); border:1px solid var(--ec); border-radius:6px; padding:0 3px; line-height:13px; }
 .rune.hasart { position:relative; }
+/* keep the power number and component name readable on top of rune art */
+.cpow, .cname { z-index:3; text-shadow: 0 0 3px #000, 0 0 2px #000, 0 0 1px #000; }
+.cpow { font-weight:bold; }
